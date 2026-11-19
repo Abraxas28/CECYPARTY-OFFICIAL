@@ -1069,6 +1069,10 @@ function leaveRoom(socket) {
 
     if (!room) return;
 
+    socket.emit("roomLeft", {
+        code: room.code
+    });
+
     socket.leave(room.code);
 
     removePlayer(room, playerId);
