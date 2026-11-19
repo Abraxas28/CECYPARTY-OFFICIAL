@@ -129,7 +129,9 @@ function getGameState(room) {
     return {
         phase: game.phase,
         turnIndex: game.turnIndex,
-        activePlayerId: room.players[game.turnIndex]?.id || null,
+        activePlayerId: game.phase === "minigame"
+    ? game.minigame?.activePlayerId || null
+    : room.players[game.turnIndex]?.id || null,
         turnsTaken: game.turnsTaken,
         round: game.round,
         topicIndex: game.topicIndex,
