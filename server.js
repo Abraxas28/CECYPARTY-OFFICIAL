@@ -13,6 +13,7 @@ const io = new Server(server, {
 });
 
 const rooms = new Map();
+const TIEMPO_RECONEXION = 2 * 60 * 1000;
 
 function generarCodigo() {
     let code;
@@ -24,11 +25,25 @@ function generarCodigo() {
     return code;
 }
 
+function obtenerJugador(room, playerId) {
+    return room.players.find(player => player.id === playerId);
+}
+
+function listaJugadores(room) {
+    return room.players.map(player => ({
+        id: player.id,
+        name: player.name
+    }));
+}
+
 function enviarSalas() {
     for (const socket of io.sockets.sockets.values()) {
+        const playerId = socket.data.playerId;
+
         const salas = [...rooms.values()]
             .filter(room => {
-                const esMiembro = room.players.some(player => player.id === socket.id);
+                const esMiembro = room.players.some(player => player.id === playerId);
+
                 return esMiembro || (!room.started && room.players.length < room.maxPlayers);
             })
             .map(room => ({
@@ -37,8 +52,8 @@ function enviarSalas() {
                 players: room.players.length,
                 playerNames: room.players.map(player => player.name),
                 maxPlayers: room.maxPlayers,
-                isMember: room.players.some(player => player.id === socket.id),
-                isHost: room.hostId === socket.id,
+                isMember: room.players.some(player => player.id === playerId),
+                isHost: room.hostId === playerId,
                 started: room.started
             }));
 
@@ -46,38 +61,95 @@ function enviarSalas() {
     }
 }
 
-function eliminarJugador(socket) {
-    const code = socket.data.roomCode;
-    if (!code) return;
+function eliminarJugadorDeSala(room, player) {
+    if (player.disconnectTimer) {
+        clearTimeout(player.disconnectTimer);
+    }
 
-    const room = rooms.get(code);
-    if (!room) {
-        socket.data.roomCode = null;
+    room.players = room.players.filter(p => p.id !== player.id);
+
+    if (room.players.length === 0) {
+        rooms.delete(room.code);
         return;
     }
 
-    room.players = room.players.filter(player => player.id !== socket.id);
+    if (room.hostId === player.id) {
+        room.hostId = room.players[0].id;
+    }
+
+    io.to(room.code).emit("playerList", listaJugadores(room));
+}
+
+function eliminarJugador(socket) {
+    const playerId = socket.data.playerId;
+    const code = socket.data.roomCode;
+
+    if (!playerId || !code) return;
+
+    const room = rooms.get(code);
 
     socket.leave(code);
     socket.data.roomCode = null;
 
-    if (room.players.length === 0) {
-        rooms.delete(code);
-        socket.emit("roomClosed");
-    } else {
-        if (room.hostId === socket.id) {
-            room.hostId = room.players[0].id;
-        }
+    if (!room) return;
 
-        io.to(code).emit("playerList", room.players);
-    }
+    const player = obtenerJugador(room, playerId);
+
+    if (!player) return;
+
+    eliminarJugadorDeSala(room, player);
 
     socket.emit("roomLeft");
     enviarSalas();
 }
 
+function recuperarJugador(socket) {
+    const playerId = socket.data.playerId;
+
+    if (!playerId) return;
+
+    for (const room of rooms.values()) {
+        const player = obtenerJugador(room, playerId);
+
+        if (!player) continue;
+
+        if (player.disconnectTimer) {
+            clearTimeout(player.disconnectTimer);
+            player.disconnectTimer = null;
+        }
+
+        player.socketId = socket.id;
+        socket.data.roomCode = room.code;
+
+        socket.join(room.code);
+
+        socket.emit("roomRestored", {
+            code: room.code,
+            mapName: room.mapName,
+            players: listaJugadores(room),
+            maxPlayers: room.maxPlayers,
+            isHost: room.hostId === playerId,
+            started: room.started
+        });
+
+        io.to(room.code).emit("playerList", listaJugadores(room));
+
+        enviarSalas();
+
+        console.log("Jugador reconectado:", player.name, room.code);
+
+        return;
+    }
+
+    enviarSalas();
+}
+
 io.on("connection", socket => {
+    socket.data.playerId = socket.handshake.auth?.playerId || socket.id;
+
     console.log("Conectado:", socket.id);
+
+    recuperarJugador(socket);
 
     socket.on("getRooms", () => {
         enviarSalas();
@@ -90,30 +162,34 @@ io.on("connection", socket => {
             eliminarJugador(socket);
         }
 
+        const playerId = socket.data.playerId;
         const code = generarCodigo();
 
         const room = {
             code,
             mapName,
-            hostId: socket.id,
+            hostId: playerId,
             maxPlayers: 4,
             started: false,
             players: [
                 {
-                    id: socket.id,
-                    name: playerName
+                    id: playerId,
+                    socketId: socket.id,
+                    name: playerName,
+                    disconnectTimer: null
                 }
             ]
         };
 
         rooms.set(code, room);
+
         socket.join(code);
         socket.data.roomCode = code;
 
         socket.emit("roomCreated", {
             code,
             mapName,
-            players: room.players
+            players: listaJugadores(room)
         });
 
         enviarSalas();
@@ -138,13 +214,15 @@ io.on("connection", socket => {
             return;
         }
 
-        if (room.players.length >= room.maxPlayers) {
-            socket.emit("roomError", "La partida está llena.");
+        const playerId = socket.data.playerId;
+
+        if (room.players.some(player => player.id === playerId)) {
+            socket.emit("roomError", "Ya estás dentro de esta partida.");
             return;
         }
 
-        if (room.players.some(player => player.id === socket.id)) {
-            socket.emit("roomError", "Ya estás dentro de esta partida.");
+        if (room.players.length >= room.maxPlayers) {
+            socket.emit("roomError", "La partida está llena.");
             return;
         }
 
@@ -153,19 +231,21 @@ io.on("connection", socket => {
         }
 
         room.players.push({
-            id: socket.id,
-            name: playerName
+            id: playerId,
+            socketId: socket.id,
+            name: playerName,
+            disconnectTimer: null
         });
 
         socket.join(code);
         socket.data.roomCode = code;
 
-        io.to(code).emit("playerList", room.players);
+        io.to(code).emit("playerList", listaJugadores(room));
 
         socket.emit("joinedRoom", {
             code,
             mapName: room.mapName,
-            players: room.players
+            players: listaJugadores(room)
         });
 
         enviarSalas();
@@ -183,7 +263,7 @@ io.on("connection", socket => {
             return;
         }
 
-        if (room.hostId !== socket.id) {
+        if (room.hostId !== socket.data.playerId) {
             socket.emit("roomError", "Solo el anfitrión puede configurar la sala.");
             return;
         }
@@ -224,13 +304,15 @@ io.on("connection", socket => {
             return;
         }
 
-        if (room.hostId !== socket.id) {
+        if (room.hostId !== socket.data.playerId) {
             socket.emit("roomError", "Solo el anfitrión puede iniciar la partida.");
             return;
         }
 
-        if (room.players.length < 2) {
-            socket.emit("roomError", "Necesitas al menos 2 jugadores para iniciar.");
+        const jugadoresConectados = room.players.filter(player => player.socketId).length;
+
+        if (jugadoresConectados < 2) {
+            socket.emit("roomError", "Necesitas al menos 2 jugadores conectados para iniciar.");
             return;
         }
 
@@ -244,15 +326,53 @@ io.on("connection", socket => {
         io.to(code).emit("roomStarted", {
             code: room.code,
             mapName: room.mapName,
-            players: room.players
+            players: listaJugadores(room)
         });
 
         enviarSalas();
     });
 
     socket.on("disconnect", () => {
-        eliminarJugador(socket);
-        console.log("Desconectado:", socket.id);
+        const playerId = socket.data.playerId;
+        const code = socket.data.roomCode;
+
+        if (!playerId || !code) {
+            console.log("Desconectado:", socket.id);
+            return;
+        }
+
+        const room = rooms.get(code);
+
+        if (!room) return;
+
+        const player = obtenerJugador(room, playerId);
+
+        if (!player || player.socketId !== socket.id) {
+            return;
+        }
+
+        player.socketId = null;
+
+        player.disconnectTimer = setTimeout(() => {
+            const currentRoom = rooms.get(code);
+
+            if (!currentRoom) return;
+
+            const currentPlayer = obtenerJugador(currentRoom, playerId);
+
+            if (!currentPlayer || currentPlayer.socketId !== null) {
+                return;
+            }
+
+            console.log("Tiempo de reconexión agotado:", currentPlayer.name);
+
+            eliminarJugadorDeSala(currentRoom, currentPlayer);
+            enviarSalas();
+        }, TIEMPO_RECONEXION);
+
+        console.log("Jugador desconectado temporalmente:", player.name);
+
+        enviarSalas();
     });
 });
 
