@@ -20,10 +20,6 @@ const MINIGAME_COINS = 10;
 const MINIGAME_SECONDS = 12;
 const RECONNECT_TIME = 2 * 60 * 1000;
 
-// ==========================================
-// UTILIDADES
-// ==========================================
-
 function generarCodigo() {
     let code;
 
@@ -87,10 +83,6 @@ function enviarSalas() {
     }
 }
 
-// ==========================================
-// SISTEMA DE PARTIDA
-// ==========================================
-
 function iniciarEstadoDePartida(room) {
     const jugadores = obtenerJugadoresConectados(room);
 
@@ -98,17 +90,14 @@ function iniciarEstadoDePartida(room) {
         phase: "turn",
         round: 1,
         topicIndex: 0,
-
         turnIndex: 0,
 
         players: jugadores.map((player, index) => ({
             id: player.id,
             name: player.name,
-
             points: 0,
             coins: index === 0 ? 65 : 50,
             pos: 0,
-
             double: false,
             frozen: false,
             shield: false
@@ -120,7 +109,9 @@ function iniciarEstadoDePartida(room) {
         minigameScores: {},
         minigameOrder: [],
         minigameIndex: 0,
-        currentMinigamePlayerId: null
+        currentMinigamePlayerId: null,
+        minigameStartedAt: null,
+        minigameEndsAt: null
     };
 
     enviarEstado(room);
@@ -142,84 +133,55 @@ function iniciarLeccion(room) {
     console.log("Lección iniciada:", room.code);
 }
 
-function iniciarTurnoMinijuego(room) {
+function iniciarMinijuego(room) {
     const game = room.game;
 
     if (!game || game.phase !== "minigame") return;
 
-    if (game.minigameIndex >= game.minigameOrder.length) {
-        finalizarMinijuego(room);
-        return;
-    }
+    clearTimeout(room.gameTimer);
 
-    const playerId = game.minigameOrder[game.minigameIndex];
-    const player = game.players.find(p => p.id === playerId);
+    game.minigameScores = {};
+    game.minigameOrder = game.players.map(player => player.id);
+    game.minigameIndex = 0;
+    game.currentMinigamePlayerId = null;
+    game.minigameStartedAt = Date.now();
+    game.minigameEndsAt = Date.now() + MINIGAME_SECONDS * 1000;
 
-    if (!player) {
-        game.minigameIndex++;
-        iniciarTurnoMinijuego(room);
-        return;
-    }
-
-    game.currentMinigamePlayerId = playerId;
-
-    const data = {
-        playerId,
-        playerName: player.name,
+    io.to(room.code).emit("minigameStarted", {
         duration: MINIGAME_SECONDS,
-        index: game.minigameIndex,
-        total: game.minigameOrder.length
-    };
-
-    io.to(room.code).emit("minigameTurnStarted", data);
+        players: game.players.map(player => ({
+            id: player.id,
+            name: player.name
+        })),
+        startedAt: game.minigameStartedAt,
+        endsAt: game.minigameEndsAt
+    });
 
     enviarEstado(room);
 
-    // Si el jugador no entrega su resultado a tiempo,
-    // el servidor registra cero puntos y continúa.
-    clearTimeout(room.gameTimer);
-
     room.gameTimer = setTimeout(() => {
-        terminarTurnoMinijuego(room, playerId, 0);
-    }, MINIGAME_SECONDS * 1000 + 1500);
+        finalizarMinijuego(room);
+    }, MINIGAME_SECONDS * 1000);
 
-    console.log(
-        `Minijuego: ${player.name} (${game.minigameIndex + 1}/${game.minigameOrder.length})`
-    );
-}
-
-function terminarTurnoMinijuego(room, playerId, score) {
-    const game = room.game;
-
-    if (!game || game.phase !== "minigame") return;
-
-    if (game.currentMinigamePlayerId !== playerId) return;
-
-    clearTimeout(room.gameTimer);
-    room.gameTimer = null;
-
-    game.minigameScores[playerId] = score;
-    game.currentMinigamePlayerId = null;
-
-    io.to(room.code).emit("minigameTurnEnded", {
-        playerId,
-        score
-    });
-
-    game.minigameIndex++;
-
-    iniciarTurnoMinijuego(room);
+    console.log("Minijuego simultáneo iniciado:", room.code);
 }
 
 function finalizarMinijuego(room) {
     const game = room.game;
 
-    if (!game) return;
+    if (!game || game.phase !== "minigame") return;
 
     clearTimeout(room.gameTimer);
     room.gameTimer = null;
 
-    const scores = game.minigameScores;
+    const scores = {};
+
+    for (const player of game.players) {
+        scores[player.id] = Number.isInteger(game.minigameScores[player.id])
+            ? game.minigameScores[player.id]
+            : 0;
+    }
+
     const valores = Object.values(scores);
 
     const puntuacionMaxima = valores.length
@@ -231,7 +193,6 @@ function finalizarMinijuego(room) {
             puntuacionMaxima > 0;
     });
 
-    // Se premia a quien obtuvo la mayor puntuación.
     for (const player of ganadores) {
         player.points += MINIGAME_POINTS;
         player.coins += MINIGAME_COINS;
@@ -240,6 +201,14 @@ function finalizarMinijuego(room) {
     const ganadorFinal = game.players.find(
         player => player.points >= GOAL
     );
+
+    io.to(room.code).emit("minigameFinished", {
+        scores,
+        winners: ganadores.map(player => ({
+            id: player.id,
+            name: player.name
+        }))
+    });
 
     if (ganadorFinal) {
         game.phase = "finished";
@@ -258,7 +227,6 @@ function finalizarMinijuego(room) {
         return;
     }
 
-    // Comienza una nueva ronda.
     game.phase = "turn";
     game.round++;
     game.topicIndex++;
@@ -271,23 +239,13 @@ function finalizarMinijuego(room) {
     game.minigameOrder = [];
     game.minigameIndex = 0;
     game.currentMinigamePlayerId = null;
-
-    io.to(room.code).emit("minigameFinished", {
-        scores,
-        winners: ganadores.map(player => ({
-            id: player.id,
-            name: player.name
-        }))
-    });
+    game.minigameStartedAt = null;
+    game.minigameEndsAt = null;
 
     enviarEstado(room);
 
     console.log("Nueva ronda:", room.code, game.round);
 }
-
-// ==========================================
-// ELIMINAR JUGADORES
-// ==========================================
 
 function eliminarJugadorPorId(room, playerId) {
     if (!room) return;
@@ -319,32 +277,34 @@ function eliminarJugadorPorId(room, playerId) {
             id => id !== playerId
         );
 
-        if (game.phase === "minigame" &&
-            game.currentMinigamePlayerId === playerId) {
+        delete game.minigameScores[playerId];
 
-            clearTimeout(room.gameTimer);
-            room.gameTimer = null;
-
-            game.currentMinigamePlayerId = null;
-            game.minigameIndex = Math.max(0, game.minigameIndex);
-
-            iniciarTurnoMinijuego(room);
-        } else if (indiceAnterior !== -1 &&
+        if (indiceAnterior !== -1 &&
             indiceAnterior < game.turnIndex) {
-
             game.turnIndex = Math.max(0, game.turnIndex - 1);
         }
 
         if (game.players.length === 0) {
             clearTimeout(room.gameTimer);
             rooms.delete(room.code);
+            enviarSalas();
             return;
+        }
+
+        if (game.phase === "minigame" &&
+            Object.keys(game.minigameScores).length >= game.players.length) {
+            finalizarMinijuego(room);
         }
 
         if (game.phase === "turn" &&
             game.rolledPlayers.length >= game.players.length) {
-
             iniciarLeccion(room);
+        }
+
+        if (game.phase === "lesson" &&
+            game.readyPlayers.length >= game.players.length) {
+            game.phase = "minigame";
+            iniciarMinijuego(room);
         }
 
         enviarEstado(room);
@@ -353,6 +313,7 @@ function eliminarJugadorPorId(room, playerId) {
     if (room.players.length === 0) {
         clearTimeout(room.gameTimer);
         rooms.delete(room.code);
+        enviarSalas();
         return;
     }
 
@@ -373,7 +334,6 @@ function eliminarJugador(socket) {
     if (!room) return;
 
     const playerId = socket.data.playerId;
-
     const player = obtenerJugador(room, playerId);
 
     if (player && player.disconnectTimer) {
@@ -387,10 +347,6 @@ function eliminarJugador(socket) {
 
     socket.emit("roomLeft");
 }
-
-// ==========================================
-// RECONECTAR JUGADORES
-// ==========================================
 
 function recuperarJugador(socket) {
     const playerId = socket.data.playerId;
@@ -413,9 +369,9 @@ function recuperarJugador(socket) {
         socket.emit("roomRestored", {
             code: room.code,
             mapName: room.mapName,
-            players: room.players.map(p => ({
-                id: p.id,
-                name: p.name
+            players: room.players.map(player => ({
+                id: player.id,
+                name: player.name
             })),
             maxPlayers: room.maxPlayers,
             isHost: room.hostId === playerId,
@@ -423,9 +379,9 @@ function recuperarJugador(socket) {
             gameState: obtenerEstadoPublico(room)
         });
 
-        io.to(room.code).emit("playerList", room.players.map(p => ({
-            id: p.id,
-            name: p.name
+        io.to(room.code).emit("playerList", room.players.map(player => ({
+            id: player.id,
+            name: player.name
         })));
 
         enviarEstado(room);
@@ -435,10 +391,6 @@ function recuperarJugador(socket) {
         return;
     }
 }
-
-// ==========================================
-// CONEXIONES
-// ==========================================
 
 io.on("connection", socket => {
     socket.data.playerId =
@@ -452,11 +404,7 @@ io.on("connection", socket => {
         enviarSalas();
     });
 
-    // ======================================
-    // CREAR SALA
-    // ======================================
-
-    socket.on("createRoom", ({ playerName, mapName }) => {
+    socket.on("createRoom", ({ playerName, mapName } = {}) => {
         if (!playerName || !mapName) return;
 
         if (socket.data.roomCode) {
@@ -491,9 +439,9 @@ io.on("connection", socket => {
         socket.emit("roomCreated", {
             code,
             mapName,
-            players: room.players.map(p => ({
-                id: p.id,
-                name: p.name
+            players: room.players.map(player => ({
+                id: player.id,
+                name: player.name
             }))
         });
 
@@ -502,11 +450,7 @@ io.on("connection", socket => {
         console.log("Sala creada:", code);
     });
 
-    // ======================================
-    // UNIRSE A SALA
-    // ======================================
-
-    socket.on("joinRoom", ({ code, playerName }) => {
+    socket.on("joinRoom", ({ code, playerName } = {}) => {
         if (!code || !playerName) return;
 
         code = code.toUpperCase();
@@ -549,36 +493,28 @@ io.on("connection", socket => {
         socket.join(code);
         socket.data.roomCode = code;
 
-        io.to(code).emit("playerList", room.players.map(p => ({
-            id: p.id,
-            name: p.name
+        io.to(code).emit("playerList", room.players.map(player => ({
+            id: player.id,
+            name: player.name
         })));
 
         socket.emit("joinedRoom", {
             code,
             mapName: room.mapName,
-            players: room.players.map(p => ({
-                id: p.id,
-                name: p.name
+            players: room.players.map(player => ({
+                id: player.id,
+                name: player.name
             }))
         });
 
         enviarSalas();
     });
 
-    // ======================================
-    // SALIR DE SALA
-    // ======================================
-
     socket.on("leaveRoom", () => {
         eliminarJugador(socket);
     });
 
-    // ======================================
-    // CONFIGURAR SALA
-    // ======================================
-
-    socket.on("configureRoom", ({ code, mapName, maxPlayers }) => {
+    socket.on("configureRoom", ({ code, mapName, maxPlayers } = {}) => {
         const room = rooms.get(code);
 
         if (!room) {
@@ -619,10 +555,6 @@ io.on("connection", socket => {
         enviarSalas();
     });
 
-    // ======================================
-    // INICIAR SALA
-    // ======================================
-
     socket.on("startRoom", code => {
         const room = rooms.get(code);
 
@@ -653,19 +585,15 @@ io.on("connection", socket => {
         io.to(code).emit("roomStarted", {
             code: room.code,
             mapName: room.mapName,
-            players: room.players.map(p => ({
-                id: p.id,
-                name: p.name
+            players: room.players.map(player => ({
+                id: player.id,
+                name: player.name
             })),
             gameState: obtenerEstadoPublico(room)
         });
 
         enviarSalas();
     });
-
-    // ======================================
-    // TIRAR EL DADO
-    // ======================================
 
     socket.on("rollDice", () => {
         const room = obtenerRoom(socket);
@@ -700,7 +628,7 @@ io.on("connection", socket => {
         game.turnIndex++;
 
         const siguiente = game.players.find(
-            p => !game.rolledPlayers.includes(p.id)
+            player => !game.rolledPlayers.includes(player.id)
         );
 
         if (siguiente) {
@@ -722,10 +650,6 @@ io.on("connection", socket => {
         }
     });
 
-    // ======================================
-    // CONFIRMAR QUE ESTÁ LISTO
-    // ======================================
-
     socket.on("lessonReady", () => {
         const room = obtenerRoom(socket);
         if (!room || !room.game) return;
@@ -738,8 +662,7 @@ io.on("connection", socket => {
             return;
         }
 
-        if (!game.players.some(p => p.id === playerId)) return;
-
+        if (!game.players.some(player => player.id === playerId)) return;
         if (game.readyPlayers.includes(playerId)) return;
 
         game.readyPlayers.push(playerId);
@@ -754,24 +677,9 @@ io.on("connection", socket => {
 
         if (game.readyPlayers.length >= game.players.length) {
             game.phase = "minigame";
-
-            game.minigameScores = {};
-            game.minigameOrder = game.players.map(p => p.id);
-            game.minigameIndex = 0;
-            game.currentMinigamePlayerId = null;
-
-            io.to(room.code).emit("minigameStarted", {
-                duration: MINIGAME_SECONDS
-            });
-
-            enviarEstado(room);
-            iniciarTurnoMinijuego(room);
+            iniciarMinijuego(room);
         }
     });
-
-    // ======================================
-    // ENVIAR RESULTADO DEL MINIJUEGO
-    // ======================================
 
     socket.on("submitMinigameResult", ({ score } = {}) => {
         const room = obtenerRoom(socket);
@@ -785,8 +693,10 @@ io.on("connection", socket => {
             return;
         }
 
-        if (game.currentMinigamePlayerId !== playerId) {
-            socket.emit("gameError", "No es tu turno del minijuego.");
+        if (!game.players.some(player => player.id === playerId)) return;
+
+        if (Date.now() > game.minigameEndsAt) {
+            socket.emit("gameError", "El tiempo del minijuego terminó.");
             return;
         }
 
@@ -795,12 +705,25 @@ io.on("connection", socket => {
             return;
         }
 
-        terminarTurnoMinijuego(room, playerId, score);
-    });
+        if (Object.prototype.hasOwnProperty.call(game.minigameScores, playerId)) {
+            return;
+        }
 
-    // ======================================
-    // DESCONECTAR
-    // ======================================
+        game.minigameScores[playerId] = score;
+
+        io.to(room.code).emit("minigamePlayerFinished", {
+            playerId,
+            score,
+            submitted: Object.keys(game.minigameScores).length,
+            total: game.players.length
+        });
+
+        enviarEstado(room);
+
+        if (Object.keys(game.minigameScores).length >= game.players.length) {
+            finalizarMinijuego(room);
+        }
+    });
 
     socket.on("disconnect", () => {
         const room = obtenerRoom(socket);
@@ -835,8 +758,6 @@ io.on("connection", socket => {
         console.log("Desconectado:", socket.id);
     });
 });
-
-
 
 const PORT = process.env.PORT || 3000;
 
