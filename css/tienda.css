@@ -1,0 +1,255 @@
+
+:root {
+    --verde: #5acc5e;
+    --verde-oscuro: #245c32;
+    --verde-claro: #e5fbe6;
+    --blanco: #ffffff;
+    --fondo: #f4f7f4;
+    --texto: #263b2b;
+    --rojo: #e8676b;
+}
+
+.content {
+    min-width: 0;
+    overflow-x: hidden;
+}
+
+.content h2 {
+    font-size: 24px;
+    margin: 0 0 18px;
+    color: var(--verde-oscuro);
+}
+
+.tienda-contenido {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: 18px;
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    align-items: start;
+}
+
+.catalogo {
+    min-width: 0;
+    background: var(--blanco);
+    padding: 18px;
+    border-radius: 14px;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.06);
+}
+
+.pestanas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.pestana {
+    padding: 9px 15px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--verde-oscuro);
+    background: var(--verde-claro);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.pestana:hover {
+    background: var(--verde);
+    color: var(--blanco);
+}
+
+.pestana.activa {
+    background: var(--verde);
+    color: var(--blanco);
+}
+
+.seccion {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(135px, 1fr));
+    gap: 12px;
+}
+
+.item {
+    min-width: 0;
+    padding: 12px;
+    background: #f8fff8;
+    border: 1px solid #dcefdc;
+    border-radius: 12px;
+    text-align: center;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.item:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.item img {
+    display: block;
+    width: 100%;
+    max-width: 110px;
+    height: 110px;
+    object-fit: contain;
+    margin: 0 auto 8px;
+}
+
+.item .nombre {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--texto);
+    margin: 5px 0;
+}
+
+.item .precio {
+    font-size: 13px;
+    color: var(--verde-oscuro);
+    font-weight: bold;
+    margin: 5px 0;
+}
+
+.item .etiqueta {
+    display: inline-block;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 20px;
+    background: var(--verde-claro);
+    color: var(--verde-oscuro);
+}
+
+.item .puesto {
+    font-size: 12px;
+    margin-top: 6px;
+}
+
+.vista-avatar {
+    width: 100%;
+    min-width: 0;
+    padding: 15px;
+    background: var(--blanco);
+    border-radius: 14px;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.06);
+    text-align: center;
+}
+
+.avatar-titulo {
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--verde-oscuro);
+    margin-bottom: 12px;
+}
+
+.marco-avatar {
+    width: 100%;
+    height: 300px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: var(--verde-claro);
+    border-radius: 12px;
+}
+
+.marco-avatar img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.detalle {
+    font-size: 14px;
+    color: var(--texto);
+    margin-top: 12px;
+}
+
+.content .btn {
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--blanco);
+    background: var(--verde);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.content .btn:hover {
+    background: var(--verde-oscuro);
+}
+
+.aviso {
+    font-size: 14px;
+    margin-top: 12px;
+    color: var(--texto);
+}
+
+@media (max-width: 900px) {
+    .tienda-contenido {
+        grid-template-columns: minmax(0, 1fr) 220px;
+        gap: 12px;
+    }
+
+    .catalogo {
+        padding: 12px;
+    }
+
+    .seccion {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    }
+}
+
+@media (max-width: 650px) {
+    .tienda-contenido {
+        grid-template-columns: 1fr;
+    }
+
+    .vista-avatar {
+        max-width: 350px;
+        margin: 0 auto;
+    }
+
+    .marco-avatar {
+        height: 260px;
+    }
+}
+
+@media (max-width: 480px) {
+    .content h2 {
+        font-size: 21px;
+    }
+
+    .pestana {
+        padding: 8px 10px;
+        font-size: 12px;
+    }
+
+    .seccion {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .item img {
+        height: 90px;
+    }
+}
+
+#cambiarAvatar {
+    width: 100%;
+    margin-top: 12px;
+    padding: 12px;
+    background: var(--verde);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+#cambiarAvatar:hover {
+    background: var(--verde-oscuro);
+}

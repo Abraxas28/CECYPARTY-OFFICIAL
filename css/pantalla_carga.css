@@ -1,0 +1,284 @@
+
+:root {
+    --crema: #FCF5D8;
+    --verde: #5acc5e;
+    --verde-oscuro: #3fa443;
+    --texto: #3b3a2e;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Fredoka', 'Trebuchet MS', sans-serif;
+    background: var(--crema);
+    color: var(--texto);
+    height: 100vh;
+    overflow: hidden;
+}
+
+.carga {
+    position: relative;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding-top: 8vh;
+    gap: 12px;
+    background: radial-gradient(circle at 50% 40%, #fffbe8 0, var(--crema) 70%);
+}
+
+.globo {
+    position: absolute;
+    bottom: -120px;
+    width: 60px;
+    height: 76px;
+    border-radius: 50% 50% 48% 48%;
+    opacity: .7;
+    animation: subir linear infinite;
+}
+
+.globo::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    width: 2px;
+    height: 50px;
+    background: #bbb;
+}
+
+@keyframes subir {
+    to {
+        transform: translateY(-120vh) rotate(8deg);
+    }
+}
+
+.pocion {
+    height: 40vh;
+    max-height: 380px;
+    position: relative;
+    z-index: 2;
+    transform-origin: 50% 90%;
+    animation: mecer 3.2s ease-in-out infinite;
+    filter: drop-shadow(0 12px 10px rgba(0, 0, 0, .15));
+}
+
+@keyframes mecer {
+    0%, 100% {
+        transform: rotate(-7deg) translateY(0);
+    }
+
+    50% {
+        transform: rotate(7deg) translateY(-12px);
+    }
+}
+
+.burbuja {
+    position: absolute;
+    border-radius: 50%;
+    background: rgba(150, 230, 90, .6);
+    border: 2px solid #4c9b3a;
+    z-index: 1;
+    animation: burbujear linear infinite;
+}
+
+@keyframes burbujear {
+    from {
+        transform: translateY(0) scale(.5);
+        opacity: .9;
+    }
+
+    to {
+        transform: translateY(-35vh) scale(1.2);
+        opacity: 0;
+    }
+}
+
+.estado {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 1.25rem;
+    font-weight: 600;
+    position: relative;
+    z-index: 2;
+}
+
+.bolita {
+    width: 26px;
+    height: 26px;
+    border: 5px solid #d6f2d7;
+    border-top-color: var(--verde);
+    border-radius: 50%;
+    animation: girar .9s linear infinite;
+}
+
+@keyframes girar {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.btn {
+    background: var(--verde);
+    color: #fff;
+    border: 0;
+    border-radius: 30px;
+    padding: 12px 30px;
+    font: 700 1rem 'Fredoka', sans-serif;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    box-shadow: 0 5px 0 var(--verde-oscuro);
+    transition: transform .1s;
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+}
+
+.btn:active {
+    transform: translateY(3px);
+    box-shadow: 0 2px 0 var(--verde-oscuro);
+}
+
+#entrar {
+    display: none;
+    position: relative;
+    z-index: 3;
+}
+
+.volver {
+    position: absolute;
+    left: 5%;
+    bottom: 25px;
+    padding: 11px 20px;
+    font-size: .9rem;
+    z-index: 3;
+    background: rgba(255, 255, 255, .85);
+    color: var(--verde-oscuro);
+    border: 2px solid rgba(90, 204, 94, .25);
+    border-radius: 30px;
+    box-shadow: 0 3px 10px rgba(63, 164, 67, .08);
+    transition: all .25s ease;
+}
+
+.volver:hover {
+    background: var(--verde);
+    color: white;
+    transform: translateX(-4px);
+    box-shadow: 0 5px 12px rgba(63, 164, 67, .2);
+}
+
+.zona-barra {
+    position: absolute;
+    left: 5%;
+    right: 5%;
+    bottom: 80px;
+    z-index: 2;
+}
+
+.pista {
+    position: relative;
+    height: 120px;
+}
+
+.corredor {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 120px;
+}
+
+.corredor img,
+.corredor video {
+    height: 120px;
+    display: block;
+    animation: saltito .5s ease-in-out infinite;
+}
+
+.corredor video {
+    display: none;
+}
+
+@keyframes saltito {
+    50% {
+        transform: translateY(-8px);
+    }
+}
+
+.barra-caja {
+    position: relative;
+    height: 26px;
+    background: #fff;
+    border: 3px solid var(--verde);
+    border-radius: 20px;
+    overflow: hidden;
+}
+
+.barra {
+    height: 100%;
+    width: 0;
+    background: repeating-linear-gradient(
+        45deg,
+        var(--verde),
+        var(--verde) 12px,
+        #7fdc82 12px,
+        #7fdc82 24px
+    );
+    transition: width .2s linear;
+}
+
+.porcentaje {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .8rem;
+    font-weight: 700;
+    color: #fff;
+    text-shadow: 0 0 3px #2c7a30, 0 0 3px #2c7a30;
+}
+
+@media (max-width: 600px) {
+    .pocion {
+        height: 32vh;
+    }
+
+    .estado {
+        font-size: 1rem;
+    }
+
+    .corredor,
+    .corredor img,
+    .corredor video {
+        height: 100px;
+    }
+
+    .pista {
+        height: 100px;
+    }
+
+    .zona-barra {
+        left: 4%;
+        right: 4%;
+        bottom: 85px;
+    }
+
+    .volver {
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: 20px;
+        white-space: nowrap;
+    }
+
+    .volver:hover {
+        transform: translateX(-50%) translateY(-3px);
+    }
+}
