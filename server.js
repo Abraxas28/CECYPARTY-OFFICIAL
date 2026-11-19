@@ -1,4 +1,6 @@
 
+"use strict";
+
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -8,312 +10,858 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
     cors: {
-        origin: "*"
+        origin: "*",
+        methods: ["GET", "POST"]
     }
 });
 
-const rooms = new Map();
-
+const PORT = process.env.PORT || 3000;
+const MAX_PLAYERS = 4;
+const MIN_PLAYERS = 2;
 const GOAL = 500;
-const MINIGAME_POINTS = 50;
-const MINIGAME_COINS = 10;
-const MINIGAME_SECONDS = 12;
-const RECONNECT_TIME = 2 * 60 * 1000;
+const PLAYER_SECONDS = 12;
+const RECONNECT_TIME = 120000;
+
+const rooms = new Map();
+const playerRooms = new Map();
+
+const MAPS = [
+    "Bosque Químico",
+    "Galaxia Gravitacional",
+    "Laboratorio del Caos",
+    "Isla Termodinámica",
+    "Reino Molecular",
+    "Ciudad Eléctrica",
+    "Pirámides de la Materia",
+    "Océano de las Presiones",
+    "Valle de los Elementos",
+    "Montañas de la Gravedad"
+];
+
+const SHOP_ITEMS = {
+    double: 30,
+    freeze: 50,
+    points: 80,
+    shield: 40
+};
 
 function generarCodigo() {
+    const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let code;
 
     do {
-        code = Math.random().toString(36).substring(2, 7).toUpperCase();
+        code = "";
+
+        for (let i = 0; i < 5; i++) {
+            code += characters[Math.floor(Math.random() * characters.length)];
+        }
     } while (rooms.has(code));
 
     return code;
 }
 
-function obtenerRoom(socket) {
-    if (!socket.data.roomCode) return null;
-    return rooms.get(socket.data.roomCode) || null;
+function getPlayerId(socket) {
+    return String(
+        socket.handshake.auth?.playerId ||
+        socket.id
+    );
 }
 
-function obtenerJugador(room, playerId) {
+function getRoom(socket) {
+    const playerId = socket.data.playerId;
+    const code = playerRooms.get(playerId);
+
+    if (!code) return null;
+
+    return rooms.get(code) || null;
+}
+
+function getPlayer(room, playerId) {
     return room.players.find(player => player.id === playerId);
 }
 
-function obtenerJugadoresConectados(room) {
-    return room.players.filter(player => player.socketId !== null);
+function getConnectedPlayers(room) {
+    return room.players.filter(player => player.connected);
 }
 
-function obtenerEstadoPublico(room) {
-    if (!room.game) return null;
-
-    return JSON.parse(JSON.stringify(room.game));
+function publicPlayers(room) {
+    return room.players.map(player => ({
+        id: player.id,
+        name: player.name,
+        points: player.points,
+        coins: player.coins,
+        pos: player.pos,
+        double: player.double,
+        frozen: player.frozen,
+        shield: player.shield,
+        connected: player.connected
+    }));
 }
 
-function enviarEstado(room) {
+function sendRoomList() {
+    const availableRooms = [];
+
+    for (const room of rooms.values()) {
+        if (room.started) continue;
+
+        availableRooms.push({
+            code: room.code,
+            mapName: room.mapName,
+            players: publicPlayers(room),
+            maxPlayers: room.maxPlayers,
+            hostId: room.hostId
+        });
+    }
+
+    io.emit("roomList", availableRooms);
+}
+
+function sendPlayerList(room) {
+    io.to(room.code).emit("playerList", publicPlayers(room));
+    sendRoomList();
+}
+
+function getGameState(room) {
+    const game = room.game;
+
+    if (!game) return null;
+
+    return {
+        phase: game.phase,
+        turnIndex: game.turnIndex,
+        activePlayerId: room.players[game.turnIndex]?.id || null,
+        turnsTaken: game.turnsTaken,
+        round: game.round,
+        topicIndex: game.topicIndex,
+        readyPlayers: Array.from(game.ready),
+        hasRolled: game.hasRolled,
+        winnerId: game.winnerId,
+        minigame: game.minigame ? {
+            participants: [...game.minigame.participants],
+            scores: { ...game.minigame.scores },
+            currentIndex: game.minigame.currentIndex,
+            activePlayerId: game.minigame.activePlayerId,
+            turnEndsAt: game.minigame.turnEndsAt
+        } : null,
+        players: publicPlayers(room)
+    };
+}
+
+function sendGameState(room) {
     if (!room.game) return;
 
-    io.to(room.code).emit("gameState", obtenerEstadoPublico(room));
+    io.to(room.code).emit("gameState", getGameState(room));
 }
 
-function enviarSalas() {
-    for (const socket of io.sockets.sockets.values()) {
-        const playerId = socket.data.playerId;
+function clearRoomTimers(room) {
+    if (!room.game) return;
 
-        const salas = [...rooms.values()]
-            .filter(room => {
-                const esMiembro = room.players.some(
-                    player => player.id === playerId
-                );
+    if (room.game.advanceTimer) {
+        clearTimeout(room.game.advanceTimer);
+        room.game.advanceTimer = null;
+    }
 
-                return esMiembro ||
-                    (!room.started && room.players.length < room.maxPlayers);
-            })
-            .map(room => ({
-                code: room.code,
-                mapName: room.mapName,
-                players: room.players.length,
-                playerNames: room.players.map(player => player.name),
-                maxPlayers: room.maxPlayers,
-                isMember: room.players.some(player => player.id === playerId),
-                isHost: room.hostId === playerId,
-                started: room.started
-            }));
-
-        socket.emit("roomList", salas);
+    if (room.game.minigame?.timer) {
+        clearTimeout(room.game.minigame.timer);
+        room.game.minigame.timer = null;
     }
 }
 
-function iniciarEstadoDePartida(room) {
-    const jugadores = obtenerJugadoresConectados(room);
+function createPlayer(playerId, name, coins = 50) {
+    return {
+        id: playerId,
+        name: String(name || "Jugador").slice(0, 20),
+        socketId: null,
+        connected: true,
+        disconnectTimer: null,
+        points: 0,
+        coins,
+        pos: 0,
+        double: false,
+        frozen: false,
+        shield: false
+    };
+}
 
-    room.game = {
+function createGame() {
+    return {
         phase: "turn",
+        turnIndex: 0,
+        turnsTaken: 0,
         round: 1,
         topicIndex: 0,
-        turnIndex: 0,
-
-        players: jugadores.map((player, index) => ({
-            id: player.id,
-            name: player.name,
-            points: 0,
-            coins: index === 0 ? 65 : 50,
-            pos: 0,
-            double: false,
-            frozen: false,
-            shield: false
-        })),
-
-        rolledPlayers: [],
-        readyPlayers: [],
-
-        minigameScores: {},
-        minigameOrder: [],
-        minigameIndex: 0,
-        currentMinigamePlayerId: null,
-        minigameStartedAt: null,
-        minigameEndsAt: null
+        ready: new Set(),
+        hasRolled: false,
+        winnerId: null,
+        advanceTimer: null,
+        minigame: null
     };
-
-    enviarEstado(room);
 }
 
-function iniciarLeccion(room) {
-    if (!room.game || room.game.phase !== "turn") return;
+function createRoom(socket, data) {
+    const playerId = socket.data.playerId;
+    const playerName = data?.playerName || "Jugador";
+    const mapName = MAPS.includes(data?.mapName)
+        ? data.mapName
+        : MAPS[0];
 
-    room.game.phase = "lesson";
-    room.game.readyPlayers = [];
-
-    io.to(room.code).emit("lessonStarted", {
-        round: room.game.round,
-        topicIndex: room.game.topicIndex
-    });
-
-    enviarEstado(room);
-
-    console.log("Lección iniciada:", room.code);
-}
-
-function iniciarMinijuego(room) {
-    const game = room.game;
-
-    if (!game || game.phase !== "minigame") return;
-
-    clearTimeout(room.gameTimer);
-
-    game.minigameScores = {};
-    game.minigameOrder = game.players.map(player => player.id);
-    game.minigameIndex = 0;
-    game.currentMinigamePlayerId = null;
-    game.minigameStartedAt = Date.now();
-    game.minigameEndsAt = Date.now() + MINIGAME_SECONDS * 1000;
-
-    io.to(room.code).emit("minigameStarted", {
-        duration: MINIGAME_SECONDS,
-        players: game.players.map(player => ({
-            id: player.id,
-            name: player.name
-        })),
-        startedAt: game.minigameStartedAt,
-        endsAt: game.minigameEndsAt
-    });
-
-    enviarEstado(room);
-
-    room.gameTimer = setTimeout(() => {
-        finalizarMinijuego(room);
-    }, MINIGAME_SECONDS * 1000);
-
-    console.log("Minijuego simultáneo iniciado:", room.code);
-}
-
-function finalizarMinijuego(room) {
-    const game = room.game;
-
-    if (!game || game.phase !== "minigame") return;
-
-    clearTimeout(room.gameTimer);
-    room.gameTimer = null;
-
-    const scores = {};
-
-    for (const player of game.players) {
-        scores[player.id] = Number.isInteger(game.minigameScores[player.id])
-            ? game.minigameScores[player.id]
-            : 0;
-    }
-
-    const valores = Object.values(scores);
-
-    const puntuacionMaxima = valores.length
-        ? Math.max(...valores)
-        : 0;
-
-    const ganadores = game.players.filter(player => {
-        return scores[player.id] === puntuacionMaxima &&
-            puntuacionMaxima > 0;
-    });
-
-    for (const player of ganadores) {
-        player.points += MINIGAME_POINTS;
-        player.coins += MINIGAME_COINS;
-    }
-
-    const ganadorFinal = game.players.find(
-        player => player.points >= GOAL
-    );
-
-    io.to(room.code).emit("minigameFinished", {
-        scores,
-        winners: ganadores.map(player => ({
-            id: player.id,
-            name: player.name
-        }))
-    });
-
-    if (ganadorFinal) {
-        game.phase = "finished";
-
-        io.to(room.code).emit("gameFinished", {
-            winner: {
-                id: ganadorFinal.id,
-                name: ganadorFinal.name,
-                points: ganadorFinal.points
-            }
-        });
-
-        enviarEstado(room);
-
-        console.log("Partida terminada:", ganadorFinal.name);
+    if (playerRooms.has(playerId)) {
+        socket.emit("roomError", "Ya perteneces a una partida.");
         return;
     }
 
-    game.phase = "turn";
-    game.round++;
-    game.topicIndex++;
+    const code = generarCodigo();
 
-    game.turnIndex = 0;
-    game.rolledPlayers = [];
-    game.readyPlayers = [];
+    const room = {
+        code,
+        mapName,
+        hostId: playerId,
+        maxPlayers: MAX_PLAYERS,
+        started: false,
+        players: [
+            createPlayer(playerId, playerName, 65)
+        ],
+        game: null
+    };
 
-    game.minigameScores = {};
-    game.minigameOrder = [];
-    game.minigameIndex = 0;
-    game.currentMinigamePlayerId = null;
-    game.minigameStartedAt = null;
-    game.minigameEndsAt = null;
+    room.players[0].socketId = socket.id;
 
-    enviarEstado(room);
+    rooms.set(code, room);
+    playerRooms.set(playerId, code);
 
-    console.log("Nueva ronda:", room.code, game.round);
+    socket.join(code);
+
+    socket.emit("roomCreated", {
+        code,
+        mapName
+    });
+
+    sendPlayerList(room);
 }
 
-function eliminarJugadorPorId(room, playerId) {
-    if (!room) return;
+function joinRoom(socket, data) {
+    const playerId = socket.data.playerId;
+    const code = String(data?.code || "").trim().toUpperCase();
+    const playerName = data?.playerName || "Jugador";
 
-    room.players = room.players.filter(
-        player => player.id !== playerId
-    );
+    if (playerRooms.has(playerId)) {
+        const existingCode = playerRooms.get(playerId);
 
-    if (room.game) {
-        const game = room.game;
-
-        const indiceAnterior = game.players.findIndex(
-            player => player.id === playerId
-        );
-
-        game.players = game.players.filter(
-            player => player.id !== playerId
-        );
-
-        game.readyPlayers = game.readyPlayers.filter(
-            id => id !== playerId
-        );
-
-        game.rolledPlayers = game.rolledPlayers.filter(
-            id => id !== playerId
-        );
-
-        game.minigameOrder = game.minigameOrder.filter(
-            id => id !== playerId
-        );
-
-        delete game.minigameScores[playerId];
-
-        if (indiceAnterior !== -1 &&
-            indiceAnterior < game.turnIndex) {
-            game.turnIndex = Math.max(0, game.turnIndex - 1);
-        }
-
-        if (game.players.length === 0) {
-            clearTimeout(room.gameTimer);
-            rooms.delete(room.code);
-            enviarSalas();
+        if (existingCode === code) {
+            restorePlayer(socket, playerId, rooms.get(code));
             return;
         }
 
-        if (game.phase === "minigame" &&
-            Object.keys(game.minigameScores).length >= game.players.length) {
-            finalizarMinijuego(room);
-        }
-
-        if (game.phase === "turn" &&
-            game.rolledPlayers.length >= game.players.length) {
-            iniciarLeccion(room);
-        }
-
-        if (game.phase === "lesson" &&
-            game.readyPlayers.length >= game.players.length) {
-            game.phase = "minigame";
-            iniciarMinijuego(room);
-        }
-
-        enviarEstado(room);
+        socket.emit("roomError", "Ya perteneces a otra partida.");
+        return;
     }
 
+    const room = rooms.get(code);
+
+    if (!room) {
+        socket.emit("roomError", "La partida no existe.");
+        return;
+    }
+
+    if (room.started) {
+        socket.emit("roomError", "La partida ya comenzó.");
+        return;
+    }
+
+    if (room.players.length >= room.maxPlayers) {
+        socket.emit("roomError", "La partida está llena.");
+        return;
+    }
+
+    const player = createPlayer(playerId, playerName);
+    player.socketId = socket.id;
+
+    room.players.push(player);
+    playerRooms.set(playerId, code);
+
+    socket.join(code);
+
+    socket.emit("joinedRoom", {
+        code,
+        mapName: room.mapName
+    });
+
+    sendPlayerList(room);
+}
+
+function restorePlayer(socket, playerId, room) {
+    if (!room) return;
+
+    const player = getPlayer(room, playerId);
+
+    if (!player) return;
+
+    if (player.disconnectTimer) {
+        clearTimeout(player.disconnectTimer);
+        player.disconnectTimer = null;
+    }
+
+    player.connected = true;
+    player.socketId = socket.id;
+
+    socket.join(room.code);
+
+    socket.emit("roomRestored", {
+        code: room.code,
+        mapName: room.mapName,
+        players: publicPlayers(room),
+        gameState: getGameState(room)
+    });
+
+    sendPlayerList(room);
+
+    if (room.started) {
+        sendGameState(room);
+    }
+}
+
+function configureRoom(socket, data) {
+    const room = getRoom(socket);
+
+    if (!room || room.started) return;
+
+    if (room.hostId !== socket.data.playerId) {
+        socket.emit("roomError", "Solo el anfitrión puede configurar la partida.");
+        return;
+    }
+
+    if (MAPS.includes(data?.mapName)) {
+        room.mapName = data.mapName;
+    }
+
+    if (Number.isInteger(data?.maxPlayers)) {
+        room.maxPlayers = Math.min(
+            MAX_PLAYERS,
+            Math.max(MIN_PLAYERS, data.maxPlayers)
+        );
+    }
+
+    sendPlayerList(room);
+}
+
+function startRoom(socket) {
+    const room = getRoom(socket);
+
+    if (!room || room.started) return;
+
+    if (room.hostId !== socket.data.playerId) {
+        socket.emit("roomError", "Solo el anfitrión puede iniciar la partida.");
+        return;
+    }
+
+    if (getConnectedPlayers(room).length < MIN_PLAYERS) {
+        socket.emit("roomError", "Se necesitan al menos 2 jugadores.");
+        return;
+    }
+
+    room.started = true;
+    room.game = createGame();
+
+    io.to(room.code).emit("roomStarted", {
+        code: room.code,
+        mapName: room.mapName,
+        players: publicPlayers(room)
+    });
+
+    sendGameState(room);
+    startCurrentTurn(room);
+
+    sendRoomList();
+}
+
+function finishGame(room, winner) {
+    if (!room.game || room.game.phase === "finished") return;
+
+    clearRoomTimers(room);
+
+    room.game.phase = "finished";
+    room.game.winnerId = winner.id;
+
+    io.to(room.code).emit("gameFinished", {
+        winnerId: winner.id,
+        winnerName: winner.name,
+        players: publicPlayers(room)
+    });
+
+    sendGameState(room);
+}
+
+function checkWinner(room) {
+    if (!room.game) return false;
+
+    const winner = room.players
+        .filter(player => player.points >= GOAL)
+        .sort((a, b) => b.points - a.points)[0];
+
+    if (!winner) return false;
+
+    finishGame(room, winner);
+    return true;
+}
+
+function startLesson(room) {
+    if (!room.game || room.game.phase === "finished") return;
+
+    const connected = getConnectedPlayers(room);
+
+    if (connected.length === 0) return;
+
+    room.game.phase = "lesson";
+    room.game.ready = new Set();
+
+    io.to(room.code).emit("lessonStarted", {
+        topicIndex: room.game.topicIndex,
+        round: room.game.round
+    });
+
+    sendGameState(room);
+}
+
+function checkLessonReady(room) {
+    if (!room.game || room.game.phase !== "lesson") return;
+
+    const connected = getConnectedPlayers(room);
+
+    if (connected.length === 0) return;
+
+    const everyoneReady = connected.every(player =>
+        room.game.ready.has(player.id)
+    );
+
+    if (everyoneReady) {
+        startMinigame(room);
+    }
+}
+
+function lessonReady(socket) {
+    const room = getRoom(socket);
+
+    if (!room || !room.started || !room.game) return;
+    if (room.game.phase !== "lesson") return;
+
+    const player = getPlayer(room, socket.data.playerId);
+
+    if (!player || !player.connected) return;
+
+    room.game.ready.add(player.id);
+
+    io.to(room.code).emit("playerReady", {
+        playerId: player.id,
+        readyPlayers: Array.from(room.game.ready)
+    });
+
+    sendGameState(room);
+    checkLessonReady(room);
+}
+
+function startMinigame(room) {
+    if (!room.game || room.game.phase !== "lesson") return;
+
+    const participants = getConnectedPlayers(room).map(player => player.id);
+
+    if (participants.length === 0) return;
+
+    room.game.phase = "minigame";
+
+    room.game.minigame = {
+        participants,
+        scores: {},
+        currentIndex: 0,
+        activePlayerId: null,
+        turnEndsAt: null,
+        timer: null
+    };
+
+    io.to(room.code).emit("minigameStarted", {
+        topicIndex: room.game.topicIndex,
+        participants,
+        turnDuration: PLAYER_SECONDS
+    });
+
+    sendGameState(room);
+    startNextMinigameTurn(room);
+}
+
+function startNextMinigameTurn(room) {
+    if (!room.game || room.game.phase !== "minigame") return;
+
+    const minigame = room.game.minigame;
+
+    if (!minigame) return;
+
+    while (minigame.currentIndex < minigame.participants.length) {
+        const playerId = minigame.participants[minigame.currentIndex];
+        const player = getPlayer(room, playerId);
+
+        if (player && player.connected) {
+            minigame.activePlayerId = playerId;
+            minigame.turnEndsAt = Date.now() + PLAYER_SECONDS * 1000;
+
+            io.to(room.code).emit("minigameTurnStarted", {
+                playerId,
+                playerName: player.name,
+                turnNumber: minigame.currentIndex + 1,
+                totalPlayers: minigame.participants.length,
+                duration: PLAYER_SECONDS,
+                endsAt: minigame.turnEndsAt
+            });
+
+            minigame.timer = setTimeout(() => {
+                endMinigameTurn(room, playerId, 0);
+            }, PLAYER_SECONDS * 1000);
+
+            sendGameState(room);
+            return;
+        }
+
+        minigame.scores[playerId] = 0;
+        minigame.currentIndex++;
+    }
+
+    finishMinigame(room);
+}
+
+function endMinigameTurn(room, playerId, score) {
+    if (!room.game || room.game.phase !== "minigame") return;
+
+    const minigame = room.game.minigame;
+
+    if (!minigame || minigame.activePlayerId !== playerId) return;
+
+    if (minigame.timer) {
+        clearTimeout(minigame.timer);
+        minigame.timer = null;
+    }
+
+    const finalScore = Math.max(
+        0,
+        Math.min(100, Math.floor(Number(score) || 0))
+    );
+
+    minigame.scores[playerId] = finalScore;
+
+    io.to(room.code).emit("minigameTurnEnded", {
+        playerId,
+        score: finalScore
+    });
+
+    minigame.activePlayerId = null;
+    minigame.turnEndsAt = null;
+    minigame.currentIndex++;
+
+    sendGameState(room);
+    startNextMinigameTurn(room);
+}
+
+function submitMinigameResult(socket, data) {
+    const room = getRoom(socket);
+
+    if (!room || !room.game) return;
+    if (room.game.phase !== "minigame") return;
+
+    const playerId = socket.data.playerId;
+    const minigame = room.game.minigame;
+
+    if (!minigame || minigame.activePlayerId !== playerId) return;
+
+    endMinigameTurn(room, playerId, data?.score);
+}
+
+function finishMinigame(room) {
+    if (!room.game || room.game.phase !== "minigame") return;
+
+    const minigame = room.game.minigame;
+    const scores = minigame.scores;
+
+    const scoreValues = Object.values(scores);
+
+    const highestScore = scoreValues.length
+        ? Math.max(...scoreValues)
+        : 0;
+
+    const winners = minigame.participants.filter(
+        playerId => scores[playerId] === highestScore
+    );
+
+    for (const playerId of winners) {
+        const player = getPlayer(room, playerId);
+
+        if (!player) continue;
+
+        player.points += 50;
+        player.coins += 10;
+    }
+
+    io.to(room.code).emit("minigameFinished", {
+        scores,
+        winners,
+        highestScore,
+        pointsAwarded: 50,
+        coinsAwarded: 10,
+        players: publicPlayers(room)
+    });
+
+    if (checkWinner(room)) return;
+
+    room.game.phase = "turn";
+    room.game.minigame = null;
+    room.game.ready = new Set();
+    room.game.topicIndex++;
+    room.game.round++;
+    room.game.turnIndex = 0;
+    room.game.turnsTaken = 0;
+    room.game.hasRolled = false;
+
+    sendGameState(room);
+    startCurrentTurn(room);
+}
+
+function startCurrentTurn(room) {
+    if (!room.game || room.game.phase !== "turn") return;
+
+    const game = room.game;
+    const totalPlayers = room.players.length;
+
+    if (totalPlayers === 0) return;
+
+    let checked = 0;
+
+    while (checked < totalPlayers && game.turnsTaken < totalPlayers) {
+        const player = room.players[game.turnIndex];
+
+        if (!player || !player.connected || player.frozen) {
+            if (player?.frozen) {
+                player.frozen = false;
+            }
+
+            if (player) {
+                io.to(room.code).emit("turnSkipped", {
+                    playerId: player.id,
+                    playerName: player.name
+                });
+            }
+
+            game.turnsTaken++;
+            game.turnIndex = (game.turnIndex + 1) % totalPlayers;
+            checked++;
+            continue;
+        }
+
+        game.hasRolled = false;
+
+        io.to(room.code).emit("turnStarted", {
+            playerId: player.id,
+            playerName: player.name,
+            round: game.round,
+            turnsTaken: game.turnsTaken
+        });
+
+        sendGameState(room);
+        return;
+    }
+
+    if (game.turnsTaken >= totalPlayers) {
+        startLesson(room);
+    }
+}
+
+function advanceTurn(room) {
+    if (!room.game || room.game.phase !== "turn") return;
+
+    const game = room.game;
+
+    if (game.advanceTimer) {
+        clearTimeout(game.advanceTimer);
+        game.advanceTimer = null;
+    }
+
+    game.turnsTaken++;
+
+    if (game.turnsTaken >= room.players.length) {
+        startLesson(room);
+        return;
+    }
+
+    game.turnIndex = (game.turnIndex + 1) % room.players.length;
+    game.hasRolled = false;
+
+    startCurrentTurn(room);
+}
+
+function rollDice(socket) {
+    const room = getRoom(socket);
+
+    if (!room || !room.started || !room.game) return;
+    if (room.game.phase !== "turn") return;
+
+    const playerId = socket.data.playerId;
+    const player = getPlayer(room, playerId);
+    const game = room.game;
+
+    if (!player || !player.connected) return;
+    if (room.players[game.turnIndex]?.id !== playerId) return;
+    if (game.hasRolled) return;
+
+    const dice = Math.floor(Math.random() * 6) + 1;
+    const bonusDice = player.double
+        ? Math.floor(Math.random() * 6) + 1
+        : 0;
+
+    const total = dice + bonusDice;
+
+    player.double = false;
+    player.pos += total;
+
+    let tileType = "blue";
+    let message = "";
+    let coinsChange = 0;
+
+    if (player.pos % 8 === 5) {
+        tileType = "red";
+
+        if (player.shield) {
+            player.shield = false;
+            message = "¡Tu escudo te protegió!";
+        } else {
+            player.coins = Math.max(0, player.coins - 8);
+            coinsChange = -8;
+            message = "Perdiste 8 monedas.";
+        }
+    } else if (player.pos % 9 === 4) {
+        tileType = "event";
+        player.coins += 15;
+        coinsChange = 15;
+        message = "¡Casilla especial! Ganaste 15 monedas.";
+    } else {
+        player.coins += 10;
+        coinsChange = 10;
+        message = "¡Ganaste 10 monedas!";
+    }
+
+    game.hasRolled = true;
+
+    io.to(room.code).emit("diceResult", {
+        playerId,
+        playerName: player.name,
+        dice,
+        bonusDice,
+        total,
+        position: player.pos,
+        tileType,
+        coinsChange,
+        message,
+        players: publicPlayers(room)
+    });
+
+    sendGameState(room);
+
+    game.advanceTimer = setTimeout(() => {
+        advanceTurn(room);
+    }, 1800);
+}
+
+function buyItem(socket, data) {
+    const room = getRoom(socket);
+
+    if (!room || !room.started || !room.game) return;
+    if (room.game.phase !== "turn") return;
+
+    const playerId = socket.data.playerId;
+    const player = getPlayer(room, playerId);
+    const game = room.game;
+
+    if (!player || !player.connected) return;
+    if (room.players[game.turnIndex]?.id !== playerId) return;
+    if (game.hasRolled) return;
+
+    const itemId = data?.itemId || data?.item;
+    const cost = SHOP_ITEMS[itemId];
+
+    if (!cost) {
+        socket.emit("roomError", "Objeto no válido.");
+        return;
+    }
+
+    if (player.coins < cost) {
+        socket.emit("roomError", "No tienes suficientes monedas.");
+        return;
+    }
+
+    player.coins -= cost;
+
+    if (itemId === "double") {
+        player.double = true;
+    }
+
+    if (itemId === "freeze") {
+        const currentIndex = room.players.findIndex(
+            p => p.id === playerId
+        );
+
+        const nextIndex = (currentIndex + 1) % room.players.length;
+        room.players[nextIndex].frozen = true;
+    }
+
+    if (itemId === "points") {
+        player.points += 35;
+    }
+
+    if (itemId === "shield") {
+        player.shield = true;
+    }
+
+    io.to(room.code).emit("itemPurchased", {
+        playerId,
+        playerName: player.name,
+        itemId,
+        cost,
+        players: publicPlayers(room)
+    });
+
+    if (checkWinner(room)) return;
+
+    sendGameState(room);
+}
+
+function removePlayer(room, playerId) {
+    const index = room.players.findIndex(
+        player => player.id === playerId
+    );
+
+    if (index === -1) return;
+
+    const player = room.players[index];
+
+    if (player.disconnectTimer) {
+        clearTimeout(player.disconnectTimer);
+    }
+
+    const game = room.game;
+    const wasCurrentPlayer = game &&
+        game.phase === "turn" &&
+        game.turnIndex === index;
+
+    const hadRolled = wasCurrentPlayer && game.hasRolled;
+
+    if (
+        game?.phase === "minigame" &&
+        game.minigame?.activePlayerId === playerId
+    ) {
+        endMinigameTurn(room, playerId, 0);
+    }
+
+    room.players.splice(index, 1);
+    playerRooms.delete(playerId);
+
     if (room.players.length === 0) {
-        clearTimeout(room.gameTimer);
+        clearRoomTimers(room);
         rooms.delete(room.code);
-        enviarSalas();
+        sendRoomList();
         return;
     }
 
@@ -321,445 +869,160 @@ function eliminarJugadorPorId(room, playerId) {
         room.hostId = room.players[0].id;
     }
 
-    io.to(room.code).emit("playerList", room.players.map(player => ({
-        id: player.id,
-        name: player.name
-    })));
-
-    enviarSalas();
-}
-
-function eliminarJugador(socket) {
-    const room = obtenerRoom(socket);
-    if (!room) return;
-
-    const playerId = socket.data.playerId;
-    const player = obtenerJugador(room, playerId);
-
-    if (player && player.disconnectTimer) {
-        clearTimeout(player.disconnectTimer);
-    }
-
-    eliminarJugadorPorId(room, playerId);
-
-    socket.leave(room.code);
-    socket.data.roomCode = null;
-
-    socket.emit("roomLeft");
-}
-
-function recuperarJugador(socket) {
-    const playerId = socket.data.playerId;
-
-    for (const room of rooms.values()) {
-        const player = obtenerJugador(room, playerId);
-
-        if (!player) continue;
-
-        if (player.disconnectTimer) {
-            clearTimeout(player.disconnectTimer);
-            player.disconnectTimer = null;
+    if (game && game.phase === "turn") {
+        if (index < game.turnIndex) {
+            game.turnIndex--;
+        } else if (index === game.turnIndex) {
+            game.turnIndex = index % room.players.length;
         }
 
-        player.socketId = socket.id;
+        if (wasCurrentPlayer) {
+            if (game.advanceTimer) {
+                clearTimeout(game.advanceTimer);
+                game.advanceTimer = null;
+            }
 
-        socket.join(room.code);
-        socket.data.roomCode = room.code;
+            if (hadRolled) {
+                game.turnsTaken++;
 
-        socket.emit("roomRestored", {
-            code: room.code,
-            mapName: room.mapName,
-            players: room.players.map(player => ({
-                id: player.id,
-                name: player.name
-            })),
-            maxPlayers: room.maxPlayers,
-            isHost: room.hostId === playerId,
-            started: room.started,
-            gameState: obtenerEstadoPublico(room)
-        });
-
-        io.to(room.code).emit("playerList", room.players.map(player => ({
-            id: player.id,
-            name: player.name
-        })));
-
-        enviarEstado(room);
-        enviarSalas();
-
-        console.log("Jugador reconectado:", player.name, room.code);
-        return;
+                if (game.turnsTaken >= room.players.length) {
+                    startLesson(room);
+                } else {
+                    startCurrentTurn(room);
+                }
+            } else {
+                startCurrentTurn(room);
+            }
+        }
     }
+
+    sendPlayerList(room);
+
+    if (room.started) {
+        sendGameState(room);
+
+        if (game?.phase === "lesson") {
+            checkLessonReady(room);
+        }
+    }
+}
+
+function leaveRoom(socket) {
+    const playerId = socket.data.playerId;
+    const room = getRoom(socket);
+
+    if (!room) return;
+
+    socket.leave(room.code);
+    removePlayer(room, playerId);
+}
+
+function handleDisconnect(socket) {
+    const playerId = socket.data.playerId;
+    const room = getRoom(socket);
+
+    if (!room) return;
+
+    const player = getPlayer(room, playerId);
+
+    if (!player || player.socketId !== socket.id) return;
+
+    player.connected = false;
+    player.socketId = null;
+
+    player.disconnectTimer = setTimeout(() => {
+        removePlayer(room, playerId);
+    }, RECONNECT_TIME);
+
+    if (room.started && room.game) {
+        if (
+            room.game.phase === "turn" &&
+            room.players[room.game.turnIndex]?.id === playerId
+        ) {
+            advanceTurn(room);
+        }
+
+        if (room.game.phase === "lesson") {
+            checkLessonReady(room);
+        }
+
+        sendGameState(room);
+    }
+
+    sendPlayerList(room);
 }
 
 io.on("connection", socket => {
-    socket.data.playerId =
-        socket.handshake.auth?.playerId || socket.id;
+    socket.data.playerId = getPlayerId(socket);
 
-    console.log("Conectado:", socket.id);
+    const playerId = socket.data.playerId;
+    const previousRoomCode = playerRooms.get(playerId);
 
-    recuperarJugador(socket);
+    if (previousRoomCode) {
+        const previousRoom = rooms.get(previousRoomCode);
+
+        if (previousRoom) {
+            restorePlayer(socket, playerId, previousRoom);
+        }
+    }
 
     socket.on("getRooms", () => {
-        enviarSalas();
+        sendRoomList();
+        socket.emit("roomList", Array.from(rooms.values())
+            .filter(room => !room.started)
+            .map(room => ({
+                code: room.code,
+                mapName: room.mapName,
+                players: publicPlayers(room),
+                maxPlayers: room.maxPlayers,
+                hostId: room.hostId
+            })));
     });
 
-    socket.on("createRoom", ({ playerName, mapName } = {}) => {
-        if (!playerName || !mapName) return;
-
-        if (socket.data.roomCode) {
-            eliminarJugador(socket);
-        }
-
-        const playerId = socket.data.playerId;
-        const code = generarCodigo();
-
-        const room = {
-            code,
-            mapName,
-            hostId: playerId,
-            maxPlayers: 4,
-            started: false,
-            game: null,
-            gameTimer: null,
-
-            players: [{
-                id: playerId,
-                socketId: socket.id,
-                name: playerName,
-                disconnectTimer: null
-            }]
-        };
-
-        rooms.set(code, room);
-
-        socket.join(code);
-        socket.data.roomCode = code;
-
-        socket.emit("roomCreated", {
-            code,
-            mapName,
-            players: room.players.map(player => ({
-                id: player.id,
-                name: player.name
-            }))
-        });
-
-        enviarSalas();
-
-        console.log("Sala creada:", code);
+    socket.on("createRoom", data => {
+        createRoom(socket, data);
     });
 
-    socket.on("joinRoom", ({ code, playerName } = {}) => {
-        if (!code || !playerName) return;
+    socket.on("joinRoom", data => {
+        joinRoom(socket, data);
+    });
 
-        code = code.toUpperCase();
+    socket.on("configureRoom", data => {
+        configureRoom(socket, data || {});
+    });
 
-        const room = rooms.get(code);
-
-        if (!room) {
-            socket.emit("roomError", "Esa partida ya no existe.");
-            return;
-        }
-
-        if (room.started) {
-            socket.emit("roomError", "Esta partida ya comenzó.");
-            return;
-        }
-
-        if (room.players.length >= room.maxPlayers) {
-            socket.emit("roomError", "La partida está llena.");
-            return;
-        }
-
-        const playerId = socket.data.playerId;
-
-        if (room.players.some(player => player.id === playerId)) {
-            socket.emit("roomError", "Ya estás dentro de esta partida.");
-            return;
-        }
-
-        if (socket.data.roomCode) {
-            eliminarJugador(socket);
-        }
-
-        room.players.push({
-            id: playerId,
-            socketId: socket.id,
-            name: playerName,
-            disconnectTimer: null
-        });
-
-        socket.join(code);
-        socket.data.roomCode = code;
-
-        io.to(code).emit("playerList", room.players.map(player => ({
-            id: player.id,
-            name: player.name
-        })));
-
-        socket.emit("joinedRoom", {
-            code,
-            mapName: room.mapName,
-            players: room.players.map(player => ({
-                id: player.id,
-                name: player.name
-            }))
-        });
-
-        enviarSalas();
+    socket.on("startRoom", () => {
+        startRoom(socket);
     });
 
     socket.on("leaveRoom", () => {
-        eliminarJugador(socket);
-    });
-
-    socket.on("configureRoom", ({ code, mapName, maxPlayers } = {}) => {
-        const room = rooms.get(code);
-
-        if (!room) {
-            socket.emit("roomError", "La partida ya no existe.");
-            return;
-        }
-
-        if (room.hostId !== socket.data.playerId) {
-            socket.emit("roomError", "Solo el anfitrión puede configurar la sala.");
-            return;
-        }
-
-        if (room.started) {
-            socket.emit("roomError", "No puedes configurar una partida iniciada.");
-            return;
-        }
-
-        const capacidad = Number(maxPlayers);
-
-        if (![2, 3, 4].includes(capacidad)) {
-            socket.emit("roomError", "La sala debe permitir entre 2 y 4 jugadores.");
-            return;
-        }
-
-        if (capacidad < room.players.length) {
-            socket.emit("roomError", "No puedes establecer un límite menor al número de jugadores actuales.");
-            return;
-        }
-
-        room.mapName = mapName;
-        room.maxPlayers = capacidad;
-
-        io.to(code).emit("roomConfigured", {
-            mapName: room.mapName,
-            maxPlayers: room.maxPlayers
-        });
-
-        enviarSalas();
-    });
-
-    socket.on("startRoom", code => {
-        const room = rooms.get(code);
-
-        if (!room) {
-            socket.emit("roomError", "La partida ya no existe.");
-            return;
-        }
-
-        if (room.hostId !== socket.data.playerId) {
-            socket.emit("roomError", "Solo el anfitrión puede iniciar la partida.");
-            return;
-        }
-
-        if (obtenerJugadoresConectados(room).length < 2) {
-            socket.emit("roomError", "Necesitas al menos 2 jugadores conectados para iniciar.");
-            return;
-        }
-
-        if (room.started) {
-            socket.emit("roomError", "La partida ya comenzó.");
-            return;
-        }
-
-        room.started = true;
-
-        iniciarEstadoDePartida(room);
-
-        io.to(code).emit("roomStarted", {
-            code: room.code,
-            mapName: room.mapName,
-            players: room.players.map(player => ({
-                id: player.id,
-                name: player.name
-            })),
-            gameState: obtenerEstadoPublico(room)
-        });
-
-        enviarSalas();
+        leaveRoom(socket);
     });
 
     socket.on("rollDice", () => {
-        const room = obtenerRoom(socket);
-        if (!room || !room.game) return;
+        rollDice(socket);
+    });
 
-        const game = room.game;
-        const playerId = socket.data.playerId;
-
-        if (game.phase !== "turn") {
-            socket.emit("gameError", "No puedes tirar el dado en este momento.");
-            return;
-        }
-
-        const player = game.players[game.turnIndex];
-
-        if (!player || player.id !== playerId) {
-            socket.emit("gameError", "No es tu turno.");
-            return;
-        }
-
-        if (game.rolledPlayers.includes(playerId)) {
-            socket.emit("gameError", "Ya tiraste el dado en esta ronda.");
-            return;
-        }
-
-        const dice = Math.floor(Math.random() * 6) + 1;
-        const oldPosition = player.pos;
-
-        player.pos += dice;
-
-        game.rolledPlayers.push(playerId);
-        game.turnIndex++;
-
-        const siguiente = game.players.find(
-            player => !game.rolledPlayers.includes(player.id)
-        );
-
-        if (siguiente) {
-            game.turnIndex = game.players.indexOf(siguiente);
-        }
-
-        io.to(room.code).emit("diceRolled", {
-            playerId,
-            playerName: player.name,
-            dice,
-            oldPosition,
-            newPosition: player.pos
-        });
-
-        if (game.rolledPlayers.length >= game.players.length) {
-            iniciarLeccion(room);
-        } else {
-            enviarEstado(room);
-        }
+    socket.on("buyItem", data => {
+        buyItem(socket, data || {});
     });
 
     socket.on("lessonReady", () => {
-        const room = obtenerRoom(socket);
-        if (!room || !room.game) return;
-
-        const game = room.game;
-        const playerId = socket.data.playerId;
-
-        if (game.phase !== "lesson") {
-            socket.emit("gameError", "No estamos en la fase de preparación.");
-            return;
-        }
-
-        if (!game.players.some(player => player.id === playerId)) return;
-        if (game.readyPlayers.includes(playerId)) return;
-
-        game.readyPlayers.push(playerId);
-
-        io.to(room.code).emit("playerReady", {
-            playerId,
-            readyCount: game.readyPlayers.length,
-            totalPlayers: game.players.length
-        });
-
-        enviarEstado(room);
-
-        if (game.readyPlayers.length >= game.players.length) {
-            game.phase = "minigame";
-            iniciarMinijuego(room);
-        }
+        lessonReady(socket);
     });
 
-    socket.on("submitMinigameResult", ({ score } = {}) => {
-        const room = obtenerRoom(socket);
-        if (!room || !room.game) return;
-
-        const game = room.game;
-        const playerId = socket.data.playerId;
-
-        if (game.phase !== "minigame") {
-            socket.emit("gameError", "El minijuego no está activo.");
-            return;
-        }
-
-        if (!game.players.some(player => player.id === playerId)) return;
-
-        if (Date.now() > game.minigameEndsAt) {
-            socket.emit("gameError", "El tiempo del minijuego terminó.");
-            return;
-        }
-
-        if (!Number.isInteger(score) || score < 0 || score > 100) {
-            socket.emit("gameError", "La puntuación enviada no es válida.");
-            return;
-        }
-
-        if (Object.prototype.hasOwnProperty.call(game.minigameScores, playerId)) {
-            return;
-        }
-
-        game.minigameScores[playerId] = score;
-
-        io.to(room.code).emit("minigamePlayerFinished", {
-            playerId,
-            score,
-            submitted: Object.keys(game.minigameScores).length,
-            total: game.players.length
-        });
-
-        enviarEstado(room);
-
-        if (Object.keys(game.minigameScores).length >= game.players.length) {
-            finalizarMinijuego(room);
-        }
+    socket.on("submitMinigameResult", data => {
+        submitMinigameResult(socket, data || {});
     });
 
     socket.on("disconnect", () => {
-        const room = obtenerRoom(socket);
-        const playerId = socket.data.playerId;
-
-        if (room) {
-            const player = obtenerJugador(room, playerId);
-
-            if (player && player.socketId === socket.id) {
-                player.socketId = null;
-
-                clearTimeout(player.disconnectTimer);
-
-                player.disconnectTimer = setTimeout(() => {
-                    const currentRoom = rooms.get(room.code);
-                    if (!currentRoom) return;
-
-                    const currentPlayer = obtenerJugador(
-                        currentRoom,
-                        playerId
-                    );
-
-                    if (currentPlayer && currentPlayer.socketId === null) {
-                        eliminarJugadorPorId(currentRoom, playerId);
-                    }
-                }, RECONNECT_TIME);
-            }
-
-            enviarSalas();
-        }
-
-        console.log("Desconectado:", socket.id);
+        handleDisconnect(socket);
     });
 });
 
-const PORT = process.env.PORT || 3000;
+app.get("/", (req, res) => {
+    res.send("CECyParty Server funcionando correctamente.");
+});
 
 server.listen(PORT, "0.0.0.0", () => {
     console.log("CECyParty funcionando en puerto " + PORT);
