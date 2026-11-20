@@ -22,6 +22,7 @@ const MINIGAME_POINTS = 50;
 
 const GOAL = 500;
 const PLAYER_SECONDS = 12;
+const THERMO_SECONDS = 110;
 const RECONNECT_TIME = 120000;
 
 const rooms = new Map();
@@ -161,7 +162,9 @@ function getGameState(room) {
         minigame: game.minigame ? {
             participants: [...game.minigame.participants],
             scores: { ...game.minigame.scores },
-            endsAt: game.minigame.endsAt
+            endsAt: game.minigame.endsAt,
+            type: game.minigame.type,
+            level: game.minigame.level
         } : null,
 
         players: publicPlayers(room)
@@ -521,6 +524,26 @@ function lessonReady(socket) {
     checkLessonReady(room);
 }
 
+function getMinigameConfig(room) {
+    const round = room.game.round;
+
+    if (round % 2 === 0) {
+        const index = Math.min(2, Math.floor((round - 2) / 2));
+
+        return {
+            type: "thermo",
+            level: ["easy", "medium", "hard"][index],
+            duration: THERMO_SECONDS
+        };
+    }
+
+    return {
+        type: "runner",
+        level: null,
+        duration: PLAYER_SECONDS
+    };
+}
+
 function startMinigame(room) {
     if (!room.game || room.game.phase !== "lesson") return;
 
@@ -529,7 +552,8 @@ function startMinigame(room) {
 
     if (participants.length === 0) return;
 
-    const endsAt = Date.now() + PLAYER_SECONDS * 1000;
+    const config = getMinigameConfig(room);
+    const endsAt = Date.now() + config.duration * 1000;
 
     room.game.phase = "minigame";
 
@@ -537,13 +561,17 @@ function startMinigame(room) {
         participants,
         scores: {},
         endsAt,
+        type: config.type,
+        level: config.level,
         timer: null
     };
 
     io.to(room.code).emit("minigameStarted", {
         topicIndex: room.game.topicIndex,
         participants,
-        duration: PLAYER_SECONDS,
+        type: config.type,
+        level: config.level,
+        duration: config.duration,
         endsAt
     });
 
@@ -551,7 +579,7 @@ function startMinigame(room) {
 
     room.game.minigame.timer = setTimeout(() => {
         finishMinigame(room);
-    }, PLAYER_SECONDS * 1000);
+    }, config.duration * 1000);
 }
 
 function submitMinigameResult(socket, data) {
