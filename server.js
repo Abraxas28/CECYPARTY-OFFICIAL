@@ -1,4 +1,3 @@
-
 "use strict";
 
 const express = require("express");
@@ -47,10 +46,6 @@ const SHOP_ITEMS = {
     points: 80,
     shield: 40
 };
-
-// ==========================================
-// UTILIDADES
-// ==========================================
 
 function generarCodigo() {
     const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -109,14 +104,7 @@ function publicPlayers(room) {
         }));
 }
 
-// ==========================================
-// LISTA DE PARTIDAS
-// ==========================================
-
 function sendRoomList() {
-    // Cada usuario recibe su propia información:
-    // isMember e isHost dependen de quién consulta.
-
     for (const socket of io.sockets.sockets.values()) {
         const playerId = socket.data.playerId;
         const currentRoomCode = playerRooms.get(playerId);
@@ -129,18 +117,12 @@ function sendRoomList() {
             availableRooms.push({
                 code: room.code,
                 mapName: room.mapName,
-
-                // IMPORTANTE: ahora players es un número.
                 players: room.players.length,
-
                 playerNames: room.players.map(player => player.name),
-
                 maxPlayers: room.maxPlayers,
                 hostId: room.hostId,
-
                 isMember: currentRoomCode === room.code,
                 isHost: room.hostId === playerId,
-
                 started: room.started
             });
         }
@@ -154,10 +136,6 @@ function sendPlayerList(room) {
     sendRoomList();
 }
 
-// ==========================================
-// ESTADO DE LA PARTIDA
-// ==========================================
-
 function getGameState(room) {
     const game = room.game;
 
@@ -165,7 +143,6 @@ function getGameState(room) {
 
     return {
         phase: game.phase,
-
         turnIndex: game.turnIndex,
 
         activePlayerId: game.phase === "minigame"
@@ -181,11 +158,11 @@ function getGameState(room) {
         hasRolled: game.hasRolled,
         winnerId: game.winnerId,
 
-       minigame: game.minigame ? {
-    participants: [...game.minigame.participants],
-    scores: { ...game.minigame.scores },
-    endsAt: game.minigame.endsAt
-} : null,
+        minigame: game.minigame ? {
+            participants: [...game.minigame.participants],
+            scores: { ...game.minigame.scores },
+            endsAt: game.minigame.endsAt
+        } : null,
 
         players: publicPlayers(room)
     };
@@ -210,10 +187,6 @@ function clearRoomTimers(room) {
         room.game.minigame.timer = null;
     }
 }
-
-// ==========================================
-// JUGADORES Y PARTIDAS
-// ==========================================
 
 function createPlayer(playerId, name, coins = 50) {
     return {
@@ -272,16 +245,12 @@ function createRoom(socket, data) {
     const room = {
         code,
         mapName,
-
         hostId: playerId,
-
         maxPlayers: MAX_PLAYERS,
         started: false,
-
         players: [
             createPlayer(playerId, playerName, 65)
         ],
-
         game: null
     };
 
@@ -386,10 +355,6 @@ function restorePlayer(socket, playerId, room) {
     }
 }
 
-// ==========================================
-// CONFIGURACIÓN DE SALA
-// ==========================================
-
 function configureRoom(socket, data) {
     const room = getRoom(socket);
 
@@ -433,10 +398,6 @@ function configureRoom(socket, data) {
     sendPlayerList(room);
 }
 
-// ==========================================
-// INICIO DE PARTIDA
-// ==========================================
-
 function startRoom(socket) {
     const room = getRoom(socket);
 
@@ -473,11 +434,7 @@ function startRoom(socket) {
     sendRoomList();
 }
 
-// ==========================================
-// GANADOR
-// ==========================================
-
-function finishGame(room, winner) {
+function finishGame(room, winner, reason = "points") {
     if (!room.game || room.game.phase === "finished") return;
 
     clearRoomTimers(room);
@@ -488,6 +445,7 @@ function finishGame(room, winner) {
     io.to(room.code).emit("gameFinished", {
         winnerId: winner.id,
         winnerName: winner.name,
+        reason,
         players: publicPlayers(room)
     });
 
@@ -507,10 +465,6 @@ function checkWinner(room) {
 
     return true;
 }
-
-// ==========================================
-// LECCIONES
-// ==========================================
 
 function startLesson(room) {
     if (!room.game || room.game.phase === "finished") return;
@@ -567,10 +521,6 @@ function lessonReady(socket) {
     checkLessonReady(room);
 }
 
-// ==========================================
-// MINIJUEGO SIMULTÁNEO
-// ==========================================
-
 function startMinigame(room) {
     if (!room.game || room.game.phase !== "lesson") return;
 
@@ -599,7 +549,6 @@ function startMinigame(room) {
 
     sendGameState(room);
 
-    // Todos tienen exactamente el mismo límite de tiempo.
     room.game.minigame.timer = setTimeout(() => {
         finishMinigame(room);
     }, PLAYER_SECONDS * 1000);
@@ -616,11 +565,8 @@ function submitMinigameResult(socket, data) {
 
     if (!minigame) return;
 
-    // Solo pueden participar los jugadores que estaban conectados
-    // cuando comenzó el minijuego.
     if (!minigame.participants.includes(playerId)) return;
 
-    // Evita que alguien envíe su puntuación varias veces.
     if (Object.prototype.hasOwnProperty.call(minigame.scores, playerId)) {
         return;
     }
@@ -644,7 +590,6 @@ function submitMinigameResult(socket, data) {
 
     sendGameState(room);
 
-    // Si todos enviaron su resultado, no esperamos a que termine el reloj.
     const everyoneSubmitted = minigame.participants.every(id =>
         Object.prototype.hasOwnProperty.call(minigame.scores, id)
     );
@@ -666,7 +611,6 @@ function finishMinigame(room) {
         minigame.timer = null;
     }
 
-    // Los jugadores que no enviaron puntuación reciben 0.
     for (const playerId of minigame.participants) {
         if (!Object.prototype.hasOwnProperty.call(minigame.scores, playerId)) {
             minigame.scores[playerId] = 0;
@@ -737,10 +681,6 @@ function finishMinigame(room) {
     sendGameState(room);
     startCurrentTurn(room);
 }
-
-// ==========================================
-// TURNOS
-// ==========================================
 
 function startCurrentTurn(room) {
     if (!room.game || room.game.phase !== "turn") return;
@@ -821,10 +761,6 @@ function advanceTurn(room) {
     startCurrentTurn(room);
 }
 
-// ==========================================
-// DADO
-// ==========================================
-
 function rollDice(socket) {
     const room = getRoom(socket);
 
@@ -884,17 +820,13 @@ function rollDice(socket) {
     io.to(room.code).emit("diceResult", {
         playerId,
         playerName: player.name,
-
         dice,
         bonusDice,
         total,
-
         position: player.pos,
         tileType,
-
         coinsChange,
         message,
-
         players: publicPlayers(room)
     });
 
@@ -904,10 +836,6 @@ function rollDice(socket) {
         advanceTurn(room);
     }, 1800);
 }
-
-// ==========================================
-// TIENDA
-// ==========================================
 
 function buyItem(socket, data) {
     const room = getRoom(socket);
@@ -938,8 +866,12 @@ function buyItem(socket, data) {
 
     player.coins -= cost;
 
+    let effect = "";
+    let targetName = null;
+
     if (itemId === "double") {
         player.double = true;
+        effect = "Tu próximo lanzamiento tendrá un dado adicional.";
     }
 
     if (itemId === "freeze") {
@@ -947,47 +879,25 @@ function buyItem(socket, data) {
             p => p.id === playerId
         );
 
-        const nextIndex =
-            (currentIndex + 1) % room.players.length;
+        const nextPlayer = room.players[
+            (currentIndex + 1) % room.players.length
+        ];
 
-        room.players[nextIndex].frozen = true;
+        nextPlayer.frozen = true;
+
+        targetName = nextPlayer.name || null;
+        effect = `${targetName || "El siguiente jugador"} perderá su próximo turno.`;
     }
 
     if (itemId === "points") {
         player.points += 35;
+        effect = "¡Has conseguido 35 puntos!";
     }
 
     if (itemId === "shield") {
         player.shield = true;
+        effect = "Estás protegido de la próxima casilla roja.";
     }
-
-    let effect = "";
-let targetName = null;
-
-if (itemId === "double") {
-    effect = "Tu próximo lanzamiento tendrá un dado adicional.";
-}
-
-if (itemId === "freeze") {
-    const currentIndex = room.players.findIndex(
-        p => p.id === playerId
-    );
-
-    const nextPlayer = room.players[
-        (currentIndex + 1) % room.players.length
-    ];
-
-    targetName = nextPlayer?.name || null;
-    effect = `${targetName || "El siguiente jugador"} perderá su próximo turno.`;
-}
-
-if (itemId === "points") {
-    effect = "¡Has conseguido 35 puntos!";
-}
-
-if (itemId === "shield") {
-    effect = "Estás protegido de la próxima casilla roja.";
-}
 
     io.to(room.code).emit("itemPurchased", {
         playerId,
@@ -995,7 +905,7 @@ if (itemId === "shield") {
         itemId,
         cost,
         effect,
-targetName,
+        targetName,
         players: publicPlayers(room)
     });
 
@@ -1003,10 +913,6 @@ targetName,
 
     sendGameState(room);
 }
-
-// ==========================================
-// SALIDA Y DESCONEXIÓN
-// ==========================================
 
 function removePlayer(room, playerId) {
     const index = room.players.findIndex(
@@ -1029,13 +935,6 @@ function removePlayer(room, playerId) {
 
     const hadRolled = wasCurrentPlayer && game.hasRolled;
 
-    if (
-        game?.phase === "minigame" &&
-        game.minigame?.activePlayerId === playerId
-    ) {
-        endMinigameTurn(room, playerId, 0);
-    }
-
     room.players.splice(index, 1);
     playerRooms.delete(playerId);
 
@@ -1048,6 +947,31 @@ function removePlayer(room, playerId) {
 
     if (room.hostId === playerId) {
         room.hostId = room.players[0].id;
+    }
+
+    if (game && room.started && game.phase !== "finished") {
+        if (room.players.length < MIN_PLAYERS) {
+            finishGame(room, room.players[0], "abandon");
+            sendPlayerList(room);
+            return;
+        }
+
+        if (game.phase === "minigame" && game.minigame) {
+            game.minigame.participants =
+                game.minigame.participants.filter(id => id !== playerId);
+
+            delete game.minigame.scores[playerId];
+
+            const allDone = game.minigame.participants.every(id =>
+                Object.prototype.hasOwnProperty.call(game.minigame.scores, id)
+            );
+
+            if (allDone) {
+                finishMinigame(room);
+                sendPlayerList(room);
+                return;
+            }
+        }
     }
 
     if (game && game.phase === "turn") {
@@ -1138,10 +1062,6 @@ function handleDisconnect(socket) {
     sendPlayerList(room);
 }
 
-// ==========================================
-// SOCKET.IO
-// ==========================================
-
 io.on("connection", socket => {
     socket.data.playerId = getPlayerId(socket);
 
@@ -1157,7 +1077,6 @@ io.on("connection", socket => {
     }
 
     socket.on("getRooms", () => {
-        // Ya no enviamos dos listas diferentes.
         sendRoomList();
     });
 
@@ -1177,8 +1096,12 @@ io.on("connection", socket => {
         startRoom(socket);
     });
 
-    socket.on("leaveRoom", () => {
+    socket.on("leaveRoom", ack => {
         leaveRoom(socket);
+
+        if (typeof ack === "function") {
+            ack();
+        }
     });
 
     socket.on("rollDice", () => {
@@ -1201,10 +1124,6 @@ io.on("connection", socket => {
         handleDisconnect(socket);
     });
 });
-
-// ==========================================
-// SERVIDOR
-// ==========================================
 
 app.get("/", (req, res) => {
     res.send("CECyParty Server funcionando correctamente.");
