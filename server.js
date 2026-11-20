@@ -23,6 +23,7 @@ const MINIGAME_POINTS = 50;
 const GOAL = 500;
 const PLAYER_SECONDS = 12;
 const THERMO_SECONDS = 110;
+const FORCE_MINIGAME = null;
 const THERMO_SIM_SECONDS = 60;
 const THERMO_TICK = 50;
 
@@ -538,26 +539,6 @@ function lessonReady(socket) {
     checkLessonReady(room);
 }
 
-function getMinigameConfig(room) {
-    const round = room.game.round;
-
-    if (round % 2 === 0) {
-        const index = Math.min(2, Math.floor((round - 2) / 2));
-
-        return {
-            type: "thermo",
-            level: ["easy", "medium", "hard"][index],
-            duration: THERMO_SECONDS
-        };
-    }
-
-    return {
-        type: "runner",
-        level: null,
-        duration: PLAYER_SECONDS
-    };
-}
-
 function createThermoTeams(participants, level) {
     const preset = THERMO_PRESETS[level] || THERMO_PRESETS.easy;
     const teams = [];
@@ -834,8 +815,10 @@ function thermoCalc(socket, data) {
 function getMinigameConfig(room) {
     const round = room.game.round;
 
-    if (round % 2 === 0) {
-        const index = Math.min(2, Math.floor((round - 2) / 2));
+    const type = FORCE_MINIGAME || (round % 2 === 0 ? "thermo" : "runner");
+
+    if (type === "thermo") {
+        const index = Math.max(0, Math.min(2, Math.floor(round / 2) - 1));
 
         return {
             type: "thermo",
