@@ -18,6 +18,9 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const MAX_PLAYERS = 4;
 const MIN_PLAYERS = 2;
+
+const MINIGAME_POINTS = 50;
+
 const GOAL = 500;
 const PLAYER_SECONDS = 12;
 const RECONNECT_TIME = 120000;
