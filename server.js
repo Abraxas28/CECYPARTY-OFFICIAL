@@ -91,17 +91,19 @@ function getConnectedPlayers(room) {
 }
 
 function publicPlayers(room) {
-    return room.players.map(player => ({
-        id: player.id,
-        name: player.name,
-        points: player.points,
-        coins: player.coins,
-        pos: player.pos,
-        double: player.double,
-        frozen: player.frozen,
-        shield: player.shield,
-        connected: player.connected
-    }));
+    return room.players
+        .filter(player => player.connected)
+        .map(player => ({
+            id: player.id,
+            name: player.name,
+            points: player.points,
+            coins: player.coins,
+            pos: player.pos,
+            double: player.double,
+            frozen: player.frozen,
+            shield: player.shield,
+            connected: true
+        }));
 }
 
 // ==========================================
@@ -176,13 +178,11 @@ function getGameState(room) {
         hasRolled: game.hasRolled,
         winnerId: game.winnerId,
 
-        minigame: game.minigame ? {
-            participants: [...game.minigame.participants],
-            scores: { ...game.minigame.scores },
-            currentIndex: game.minigame.currentIndex,
-            activePlayerId: game.minigame.activePlayerId,
-            turnEndsAt: game.minigame.turnEndsAt
-        } : null,
+       minigame: game.minigame ? {
+    participants: [...game.minigame.participants],
+    scores: { ...game.minigame.scores },
+    endsAt: game.minigame.endsAt
+} : null,
 
         players: publicPlayers(room)
     };
@@ -565,7 +565,7 @@ function lessonReady(socket) {
 }
 
 // ==========================================
-// MINIJUEGO SECUENCIAL
+// MINIJUEGO SIMULTÁNEO
 // ==========================================
 
 function startMinigame(room) {
@@ -576,104 +576,30 @@ function startMinigame(room) {
 
     if (participants.length === 0) return;
 
+    const endsAt = Date.now() + PLAYER_SECONDS * 1000;
+
     room.game.phase = "minigame";
 
     room.game.minigame = {
         participants,
         scores: {},
-
-        currentIndex: 0,
-        activePlayerId: null,
-        turnEndsAt: null,
-
+        endsAt,
         timer: null
     };
 
     io.to(room.code).emit("minigameStarted", {
         topicIndex: room.game.topicIndex,
         participants,
-        turnDuration: PLAYER_SECONDS
+        duration: PLAYER_SECONDS,
+        endsAt
     });
 
     sendGameState(room);
-    startNextMinigameTurn(room);
-}
 
-function startNextMinigameTurn(room) {
-    if (!room.game || room.game.phase !== "minigame") return;
-
-    const minigame = room.game.minigame;
-
-    if (!minigame) return;
-
-    while (minigame.currentIndex < minigame.participants.length) {
-        const playerId = minigame.participants[minigame.currentIndex];
-        const player = getPlayer(room, playerId);
-
-        if (player && player.connected) {
-            minigame.activePlayerId = playerId;
-
-            minigame.turnEndsAt =
-                Date.now() + PLAYER_SECONDS * 1000;
-
-            io.to(room.code).emit("minigameTurnStarted", {
-                playerId,
-                playerName: player.name,
-
-                turnNumber: minigame.currentIndex + 1,
-                totalPlayers: minigame.participants.length,
-
-                duration: PLAYER_SECONDS,
-                endsAt: minigame.turnEndsAt
-            });
-
-            minigame.timer = setTimeout(() => {
-                endMinigameTurn(room, playerId, 0);
-            }, PLAYER_SECONDS * 1000);
-
-            sendGameState(room);
-
-            return;
-        }
-
-        minigame.scores[playerId] = 0;
-        minigame.currentIndex++;
-    }
-
-    finishMinigame(room);
-}
-
-function endMinigameTurn(room, playerId, score) {
-    if (!room.game || room.game.phase !== "minigame") return;
-
-    const minigame = room.game.minigame;
-
-    if (!minigame || minigame.activePlayerId !== playerId) return;
-
-    if (minigame.timer) {
-        clearTimeout(minigame.timer);
-        minigame.timer = null;
-    }
-
-    const finalScore = Math.max(
-        0,
-        Math.min(100, Math.floor(Number(score) || 0))
-    );
-
-    minigame.scores[playerId] = finalScore;
-
-    io.to(room.code).emit("minigameTurnEnded", {
-        playerId,
-        score: finalScore
-    });
-
-    minigame.activePlayerId = null;
-    minigame.turnEndsAt = null;
-
-    minigame.currentIndex++;
-
-    sendGameState(room);
-    startNextMinigameTurn(room);
+    // Todos tienen exactamente el mismo límite de tiempo.
+    room.game.minigame.timer = setTimeout(() => {
+        finishMinigame(room);
+    }, PLAYER_SECONDS * 1000);
 }
 
 function submitMinigameResult(socket, data) {
@@ -685,44 +611,110 @@ function submitMinigameResult(socket, data) {
     const playerId = socket.data.playerId;
     const minigame = room.game.minigame;
 
-    if (!minigame || minigame.activePlayerId !== playerId) return;
+    if (!minigame) return;
 
-    endMinigameTurn(room, playerId, data?.score);
+    // Solo pueden participar los jugadores que estaban conectados
+    // cuando comenzó el minijuego.
+    if (!minigame.participants.includes(playerId)) return;
+
+    // Evita que alguien envíe su puntuación varias veces.
+    if (Object.prototype.hasOwnProperty.call(minigame.scores, playerId)) {
+        return;
+    }
+
+    const player = getPlayer(room, playerId);
+
+    if (!player || !player.connected) return;
+
+    const score = Math.max(
+        0,
+        Math.min(100, Math.floor(Number(data?.score) || 0))
+    );
+
+    minigame.scores[playerId] = score;
+
+    io.to(room.code).emit("minigamePlayerFinished", {
+        playerId,
+        playerName: player.name,
+        score
+    });
+
+    sendGameState(room);
+
+    // Si todos enviaron su resultado, no esperamos a que termine el reloj.
+    const everyoneSubmitted = minigame.participants.every(id =>
+        Object.prototype.hasOwnProperty.call(minigame.scores, id)
+    );
+
+    if (everyoneSubmitted) {
+        finishMinigame(room);
+    }
 }
 
 function finishMinigame(room) {
     if (!room.game || room.game.phase !== "minigame") return;
 
     const minigame = room.game.minigame;
-    const scores = minigame.scores;
 
-    const scoreValues = Object.values(scores);
+    if (!minigame) return;
 
-    const highestScore = scoreValues.length
-        ? Math.max(...scoreValues)
+    if (minigame.timer) {
+        clearTimeout(minigame.timer);
+        minigame.timer = null;
+    }
+
+    // Los jugadores que no enviaron puntuación reciben 0.
+    for (const playerId of minigame.participants) {
+        if (!Object.prototype.hasOwnProperty.call(minigame.scores, playerId)) {
+            minigame.scores[playerId] = 0;
+        }
+    }
+
+    const connectedParticipants = minigame.participants
+        .map(id => getPlayer(room, id))
+        .filter(player => player && player.connected);
+
+    const highestScore = connectedParticipants.length
+        ? Math.max(
+            ...connectedParticipants.map(player =>
+                minigame.scores[player.id] || 0
+            )
+        )
         : 0;
 
-    const winners = minigame.participants.filter(
-        playerId => scores[playerId] === highestScore
-    );
+    const winners = connectedParticipants
+        .filter(player =>
+            (minigame.scores[player.id] || 0) === highestScore
+        )
+        .map(player => player.id);
 
     for (const playerId of winners) {
         const player = getPlayer(room, playerId);
 
         if (!player) continue;
 
-        player.points += 50;
+        player.points += MINIGAME_POINTS;
         player.coins += 10;
     }
 
+    const results = minigame.participants.map(playerId => {
+        const player = getPlayer(room, playerId);
+
+        return {
+            playerId,
+            playerName: player?.name || "Jugador",
+            score: minigame.scores[playerId] || 0,
+            winner: winners.includes(playerId)
+        };
+    });
+
     io.to(room.code).emit("minigameFinished", {
-        scores,
+        scores: minigame.scores,
+        results,
         winners,
         highestScore,
-
-        pointsAwarded: 50,
+        pointsAwarded: MINIGAME_POINTS,
         coinsAwarded: 10,
-
         players: publicPlayers(room)
     });
 
@@ -966,11 +958,41 @@ function buyItem(socket, data) {
         player.shield = true;
     }
 
+    let effect = "";
+let targetName = null;
+
+if (itemId === "double") {
+    effect = "Tu próximo lanzamiento tendrá un dado adicional.";
+}
+
+if (itemId === "freeze") {
+    const currentIndex = room.players.findIndex(
+        p => p.id === playerId
+    );
+
+    const nextPlayer = room.players[
+        (currentIndex + 1) % room.players.length
+    ];
+
+    targetName = nextPlayer?.name || null;
+    effect = `${targetName || "El siguiente jugador"} perderá su próximo turno.`;
+}
+
+if (itemId === "points") {
+    effect = "¡Has conseguido 35 puntos!";
+}
+
+if (itemId === "shield") {
+    effect = "Estás protegido de la próxima casilla roja.";
+}
+
     io.to(room.code).emit("itemPurchased", {
         playerId,
         playerName: player.name,
         itemId,
         cost,
+        effect,
+targetName,
         players: publicPlayers(room)
     });
 
