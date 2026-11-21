@@ -548,8 +548,8 @@ function createThermoTeams(participants, level) {
 
         teams.push({
             id: teams.length,
-            friend: members.length === 2 ? members[0] : null,
-            oven: members.length === 2 ? members[1] : members[0],
+            friend: members[0],
+            oven: members[1],
             t1: preset.t1,
             t2: preset.t2,
             valve: 0,
@@ -561,7 +561,6 @@ function createThermoTeams(participants, level) {
             phase: "sim",
             outcome: null,
             signal: null,
-            aiCooldown: 0,
             calc: {},
             done: false
         });
@@ -590,28 +589,6 @@ function publicThermoTeams(room) {
 
 function stepThermoTeam(team, p, dt) {
     team.time += dt;
-
-    if (!team.friend) {
-        team.aiCooldown -= dt;
-
-        if (team.t1 < p.smin - 2) {
-            team.res = 0.2;
-
-            if (team.aiCooldown <= 0) {
-                team.signal = { type: "more", at: Date.now() };
-                team.aiCooldown = 3.2;
-            }
-        } else if (team.t1 > p.smax - 1) {
-            team.res = 0.85;
-
-            if (team.aiCooldown <= 0) {
-                team.signal = { type: "stop", at: Date.now() };
-                team.aiCooldown = 2.8;
-            }
-        } else {
-            team.res = 0.5;
-        }
-    }
 
     team.t1 -= 0.55 * (1 - team.res * 0.45) * dt;
 
@@ -842,7 +819,12 @@ function startMinigame(room) {
 
     if (participants.length === 0) return;
 
-    const config = getMinigameConfig(room);
+    let config = getMinigameConfig(room);
+
+    if (config.type === "thermo" && participants.length !== 4) {
+        config = { type: "runner", level: null, duration: PLAYER_SECONDS };
+    }
+
     const endsAt = Date.now() + config.duration * 1000;
 
     room.game.phase = "minigame";
@@ -1305,18 +1287,28 @@ function removePlayer(room, playerId) {
 
             if (game.minigame.type === "thermo") {
                 for (const team of game.minigame.teams) {
-                    if (team.oven === playerId) {
-                        team.oven = team.friend;
-                        team.friend = null;
-                    } else if (team.friend === playerId) {
-                        team.friend = null;
+                    if (team.oven === playerId || team.friend === playerId) {
+                        const teammateId = team.oven === playerId
+                            ? team.friend
+                            : team.oven;
+
+                        team.phase = "calc";
+                        team.outcome = "timeout";
+                        team.done = true;
+
+                        if (teammateId && game.minigame.participants.includes(teammateId)) {
+                            game.minigame.scores[teammateId] = 0;
+                        }
                     }
 
                     delete team.calc[playerId];
                 }
 
                 game.minigame.teams =
-                    game.minigame.teams.filter(team => team.oven);
+                    game.minigame.teams.filter(team =>
+                        team.friend && team.oven &&
+                        team.friend !== playerId && team.oven !== playerId
+                    );
 
                 game.minigame.teams.forEach(team =>
                     checkThermoTeamDone(room, team)
