@@ -634,6 +634,7 @@ function sendThermoState(room, team) {
         phase: team.phase,
         outcome: team.outcome,
         signal: team.signal,
+        targetTemp: team.targetTemp,
         friend: team.friend,
         oven: team.oven
     };
@@ -665,11 +666,20 @@ function tickThermo(room) {
             team.outcome = outcome;
 
             if (outcome === "win") {
-                team.stab = Math.max(450, team.stab);
+                team.stab = Math.max(600, team.stab);
             }
         }
 
         sendThermoState(room, team);
+    }
+
+    const winningTeam = minigame.teams.find(team => team.outcome === "win");
+    if (winningTeam) {
+        for (const team of minigame.teams) {
+            const score = team.id === winningTeam.id ? 100 : thermoTeamScore(team);
+            for (const id of thermoHumans(team)) minigame.scores[id] = score;
+        }
+        finishMinigame(room);
     }
 }
 
@@ -775,18 +785,23 @@ function thermoInput(socket, data) {
         if (data?.signal === "more" || data?.signal === "stop") {
             team.signal = { type: data.signal, at: Date.now() };
         }
+
+        const targetTemp = Number(data?.targetTemp);
+        if (Number.isFinite(targetTemp) && targetTemp >= -50 && targetTemp <= 150) {
+            team.targetTemp = targetTemp;
+        }
     }
 }
 
 function thermoCalc(socket, data) {
     const { room, team, id } = findThermoTeam(socket);
 
-    if (!team || team.phase !== "calc") return;
+    if (!team) return;
     if (Object.prototype.hasOwnProperty.call(team.calc, id)) return;
 
     team.calc[id] = data?.correct === true;
 
-    checkThermoTeamDone(room, team);
+    if (team.phase === "calc") checkThermoTeamDone(room, team);
 }
 
 function getMinigameConfig(room) {
