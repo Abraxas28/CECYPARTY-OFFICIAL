@@ -114,30 +114,58 @@ function publicPlayers(room) {
         }));
 }
 
+function getRoomListForPlayer(playerId) {
+    const currentRoomCode = playerRooms.get(playerId);
+    const availableRooms = [];
+
+    for (const room of rooms.values()) {
+        const isMember = currentRoomCode === room.code;
+
+        if (room.started && !isMember) continue;
+
+        availableRooms.push({
+            code: room.code,
+            mapName: room.mapName,
+            players: room.players.length,
+            playerNames: room.players.map(player => player.name),
+            maxPlayers: room.maxPlayers,
+            hostId: room.hostId,
+            isMember,
+            isHost: room.hostId === playerId,
+            started: room.started,
+            finished: room.game?.phase === "finished"
+        });
+    }
+
+    return availableRooms;
+}
+
 function sendRoomList() {
     for (const socket of io.sockets.sockets.values()) {
-        const playerId = socket.data.playerId;
-        const currentRoomCode = playerRooms.get(playerId);
+        socket.emit("roomList", getRoomListForPlayer(socket.data.playerId));
+    }
+}
 
-        const availableRooms = [];
+function cleanupPlayerMembership(playerId) {
+    const code = playerRooms.get(playerId);
+    if (!code) return;
 
-        for (const room of rooms.values()) {
-            if (room.started) continue;
+    const room = rooms.get(code);
 
-            availableRooms.push({
-                code: room.code,
-                mapName: room.mapName,
-                players: room.players.length,
-                playerNames: room.players.map(player => player.name),
-                maxPlayers: room.maxPlayers,
-                hostId: room.hostId,
-                isMember: currentRoomCode === room.code,
-                isHost: room.hostId === playerId,
-                started: room.started
-            });
-        }
+    if (!room) {
+        playerRooms.delete(playerId);
+        return;
+    }
 
-        socket.emit("roomList", availableRooms);
+    const player = getPlayer(room, playerId);
+
+    if (!player) {
+        playerRooms.delete(playerId);
+        return;
+    }
+
+    if (room.game?.phase === "finished") {
+        removePlayer(room, playerId);
     }
 }
 
@@ -256,8 +284,10 @@ function createRoom(socket, data) {
         ? data.mapName
         : MAPS[0];
 
+    cleanupPlayerMembership(playerId);
+
     if (playerRooms.has(playerId)) {
-        socket.emit("roomError", "Ya perteneces a una partida.");
+        socket.emit("roomError", "Ya perteneces a una partida. Sal de tu sala actual antes de crear otra.");
         return;
     }
 
@@ -299,6 +329,8 @@ function joinRoom(socket, data) {
 
     const playerName = data?.playerName || "Jugador";
 
+    cleanupPlayerMembership(playerId);
+
     if (playerRooms.has(playerId)) {
         const existingCode = playerRooms.get(playerId);
 
@@ -307,7 +339,7 @@ function joinRoom(socket, data) {
             return;
         }
 
-        socket.emit("roomError", "Ya perteneces a otra partida.");
+        socket.emit("roomError", "Sigues dentro de la sala " + existingCode + ". Usa 'Salir de la sala' para poder unirte a otra.");
         return;
     }
 
@@ -1264,7 +1296,12 @@ function removePlayer(room, playerId) {
         player => player.id === playerId
     );
 
-    if (index === -1) return;
+    if (index === -1) {
+        if (playerRooms.get(playerId) === room.code) {
+            playerRooms.delete(playerId);
+        }
+        return;
+    }
 
     const player = room.players[index];
 
@@ -1399,14 +1436,18 @@ function leaveRoom(socket) {
     const playerId = socket.data.playerId;
     const room = getRoom(socket);
 
-    if (!room) return;
+    if (!room) {
+        playerRooms.delete(playerId);
+        socket.emit("roomLeft", { code: null });
+        sendRoomList();
+        return;
+    }
 
     socket.emit("roomLeft", {
         code: room.code
     });
 
     socket.leave(room.code);
-
     removePlayer(room, playerId);
 }
 
@@ -1460,7 +1501,7 @@ io.on("connection", socket => {
     }
 
     socket.on("getRooms", () => {
-        sendRoomList();
+        socket.emit("roomList", getRoomListForPlayer(socket.data.playerId));
     });
 
     socket.on("createRoom", data => {
