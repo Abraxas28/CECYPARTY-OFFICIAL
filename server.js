@@ -57,6 +57,90 @@ const SHOP_ITEMS = {
     shield: 40
 };
 
+const MAP_EVENTS = {
+    "Bosque Químico": [
+        { emoji: "🦌", title: "¡Venado salvaje!", description: "Un venado te embistió y saliste volando. Perdiste 15 monedas.", coins: -15 },
+        { emoji: "🍄", title: "Hongos brillantes", description: "Encontraste hongos que tenían monedas escondidas. Ganaste 15 monedas.", coins: 15 },
+        { emoji: "🧚", title: "Hada del bosque", description: "Un hada te regaló una pequeña recompensa. Ganaste 10 monedas.", coins: 10 },
+        { emoji: "🌿", title: "Planta carnívora", description: "Una planta te atrapó y soltó tus monedas. Perdiste 10 monedas.", coins: -10 }
+    ],
+    "Galaxia Gravitacional": [
+        { emoji: "☄️", title: "Lluvia de meteoritos", description: "Un meteorito golpeó tu plataforma. Perdiste 15 monedas.", coins: -15 },
+        { emoji: "🌠", title: "Estrella fugaz", description: "Atrapaste polvo estelar valioso. Ganaste 20 monedas.", coins: 20 },
+        { emoji: "🛸", title: "Ovni amistoso", description: "Un ovni te obsequió tecnología. Ganaste 10 monedas.", coins: 10 },
+        { emoji: "🌀", title: "Portal gravitacional", description: "El portal absorbió parte de tus monedas. Perdiste 10 monedas.", coins: -10 }
+    ],
+    "Laboratorio del Caos": [
+        { emoji: "🧪", title: "Poción de la suerte", description: "La mezcla salió perfecta. Ganaste 20 monedas.", coins: 20 },
+        { emoji: "💥", title: "¡Experimento fallido!", description: "La máquina explotó y perdiste 15 monedas.", coins: -15 },
+        { emoji: "🤖", title: "Robot generoso", description: "Un robot encontró monedas para ti. Ganaste 10 monedas.", coins: 10 },
+        { emoji: "🧲", title: "Imán descontrolado", description: "El imán atrajo tus monedas. Perdiste 10 monedas.", coins: -10 }
+    ],
+    "Isla Termodinámica": [
+        { emoji: "🌋", title: "Géiser sorpresa", description: "El géiser te lanzó por los aires. Perdiste 15 monedas.", coins: -15 },
+        { emoji: "💎", title: "Cristal térmico", description: "Encontraste un cristal muy valioso. Ganaste 20 monedas.", coins: 20 },
+        { emoji: "🦀", title: "Cangrejo comerciante", description: "Un cangrejo te cambió una concha por monedas. Ganaste 10 monedas.", coins: 10 },
+        { emoji: "🔥", title: "Suelo ardiente", description: "Tuviste que soltar algunas monedas para escapar. Perdiste 10 monedas.", coins: -10 }
+    ],
+    "Reino Molecular": [
+        { emoji: "🧬", title: "Reacción favorable", description: "Una reacción creó materiales valiosos. Ganaste 20 monedas.", coins: 20 },
+        { emoji: "🦠", title: "Microbio travieso", description: "Un microbio se llevó parte de tus monedas. Perdiste 10 monedas.", coins: -10 },
+        { emoji: "⚛️", title: "Átomo dorado", description: "Encontraste un átomo extraordinariamente raro. Ganaste 15 monedas.", coins: 15 },
+        { emoji: "🫧", title: "Burbuja molecular", description: "Una burbuja te hizo perder el equilibrio y 15 monedas.", coins: -15 }
+    ],
+    "Ciudad Eléctrica": [
+        { emoji: "⚡", title: "Sobrecarga eléctrica", description: "Una descarga dañó tu equipo. Perdiste 15 monedas.", coins: -15 },
+        { emoji: "🔋", title: "Batería cargada", description: "Encontraste una batería llena y la vendiste. Ganaste 20 monedas.", coins: 20 },
+        { emoji: "🤖", title: "Dron repartidor", description: "Un dron te entregó un paquete con 10 monedas.", coins: 10 },
+        { emoji: "🚦", title: "Semáforo loco", description: "El semáforo te hizo pagar una multa. Perdiste 10 monedas.", coins: -10 }
+    ],
+    "Pirámides de la Materia": [
+        { emoji: "🐍", title: "Serpiente guardiana", description: "La guardiana te asustó y perdiste 15 monedas al huir.", coins: -15 },
+        { emoji: "🏺", title: "Vasija antigua", description: "Encontraste monedas dentro de una vasija. Ganaste 20 monedas.", coins: 20 },
+        { emoji: "☀️", title: "Bendición solar", description: "La cámara del tesoro te recompensó. Ganaste 10 monedas.", coins: 10 },
+        { emoji: "🪨", title: "Trampa de arena", description: "Una trampa se llevó 10 de tus monedas.", coins: -10 }
+    ],
+    "Océano de las Presiones": [
+        { emoji: "🐙", title: "Pulpo bromista", description: "Un pulpo te arrebató 15 monedas.", coins: -15 },
+        { emoji: "🐚", title: "Concha brillante", description: "Encontraste una perla y la vendiste. Ganaste 20 monedas.", coins: 20 },
+        { emoji: "🐬", title: "Delfín amistoso", description: "Un delfín te guio hasta un tesoro. Ganaste 10 monedas.", coins: 10 },
+        { emoji: "🌊", title: "Corriente fuerte", description: "La corriente arrastró 10 de tus monedas.", coins: -10 }
+    ],
+    "Valle de los Elementos": [
+        { emoji: "🌪️", title: "Tornado elemental", description: "El viento te hizo perder 15 monedas.", coins: -15 },
+        { emoji: "💧", title: "Manantial mágico", description: "El manantial hizo aparecer 20 monedas.", coins: 20 },
+        { emoji: "🔥", title: "Llama protectora", description: "Una llama te entregó una recompensa. Ganaste 10 monedas.", coins: 10 },
+        { emoji: "🪨", title: "Avalancha", description: "Una roca rompió tu bolsa. Perdiste 10 monedas.", coins: -10 }
+    ],
+    "Montañas de la Gravedad": [
+        { emoji: "🪨", title: "Derrumbe", description: "Una roca cayó cerca de ti y perdiste 15 monedas.", coins: -15 },
+        { emoji: "🦅", title: "Águila mensajera", description: "Un águila dejó caer una bolsa. Ganaste 20 monedas.", coins: 20 },
+        { emoji: "⛏️", title: "Veta de oro", description: "Encontraste oro entre las rocas. Ganaste 15 monedas.", coins: 15 },
+        { emoji: "🌬️", title: "Ráfaga de montaña", description: "El viento se llevó 10 de tus monedas.", coins: -10 }
+    ]
+};
+
+function getMapTileType(position) {
+    const index = ((Number(position) % 48) + 48) % 48;
+    if (index % 13 === 7) return "mapEvent";
+    if (index % 8 === 5) return "red";
+    if (index % 9 === 4) return "event";
+    return "blue";
+}
+
+function triggerMapEvent(room, player) {
+    const events = MAP_EVENTS[room.mapName] || MAP_EVENTS[MAPS[0]];
+    const selected = events[Math.floor(Math.random() * events.length)];
+    const before = player.coins;
+    const coinsChange = Number(selected.coins || 0);
+    player.coins = Math.max(0, player.coins + coinsChange);
+
+    return {
+        ...selected,
+        coinsChange: player.coins - before
+    };
+}
+
 function generarCodigo() {
     const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let code;
