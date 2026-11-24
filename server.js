@@ -15,7 +15,7 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const MAX_PLAYERS = 4;
+const MAX_PLAYERS = 6;
 const MIN_PLAYERS = 2;
 
 const MINIGAME_POINTS = 50;
