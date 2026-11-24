@@ -157,7 +157,7 @@ function getGameState(room) {
 
         activePlayerId: game.phase === "minigame"
             ? game.minigame?.activePlayerId || null
-            : room.players[game.turnIndex]?.id || null,
+            : game.currentPlayerId || null,
 
         turnsTaken: game.turnsTaken,
         round: game.round,
@@ -230,6 +230,9 @@ function createGame() {
         phase: "turn",
         turnIndex: 0,
         turnsTaken: 0,
+        turnOrder: [],
+        turnCursor: 0,
+        currentPlayerId: null,
 
         round: 1,
         topicIndex: 0,
@@ -439,6 +442,7 @@ function startRoom(socket) {
 
     room.started = true;
     room.game = createGame();
+    room.game.turnOrder = getConnectedPlayers(room).map(player => player.id);
 
     io.to(room.code).emit("roomStarted", {
         code: room.code,
@@ -492,6 +496,7 @@ function startLesson(room) {
     if (connected.length === 0) return;
 
     room.game.phase = "lesson";
+    room.game.currentPlayerId = null;
     room.game.ready = new Set();
 
     io.to(room.code).emit("lessonStarted", {
@@ -1014,6 +1019,9 @@ function finishMinigame(room) {
 
     room.game.turnIndex = 0;
     room.game.turnsTaken = 0;
+    room.game.turnOrder = getConnectedPlayers(room).map(player => player.id);
+    room.game.turnCursor = 0;
+    room.game.currentPlayerId = null;
     room.game.hasRolled = false;
 
     sendGameState(room);
@@ -1024,38 +1032,43 @@ function startCurrentTurn(room) {
     if (!room.game || room.game.phase !== "turn") return;
 
     const game = room.game;
-    const totalPlayers = room.players.length;
 
-    if (totalPlayers === 0) return;
+    if (!Array.isArray(game.turnOrder)) {
+        game.turnOrder = getConnectedPlayers(room).map(player => player.id);
+        game.turnCursor = 0;
+    }
 
-    let checked = 0;
+    game.currentPlayerId = null;
 
-    while (
-        checked < totalPlayers &&
-        game.turnsTaken < totalPlayers
-    ) {
-        const player = room.players[game.turnIndex];
+    while (game.turnCursor < game.turnOrder.length) {
+        const playerId = game.turnOrder[game.turnCursor];
+        const player = getPlayer(room, playerId);
 
-        if (!player || !player.connected || player.frozen) {
-            if (player?.frozen) {
-                player.frozen = false;
-            }
-
-            if (player) {
-                io.to(room.code).emit("turnSkipped", {
-                    playerId: player.id,
-                    playerName: player.name
-                });
-            }
-
-            game.turnsTaken++;
-            game.turnIndex = (game.turnIndex + 1) % totalPlayers;
-
-            checked++;
+        if (!player || !player.connected) {
+            game.turnCursor++;
+            game.turnsTaken = game.turnCursor;
             continue;
         }
 
+        if (player.frozen) {
+            player.frozen = false;
+
+            io.to(room.code).emit("turnSkipped", {
+                playerId: player.id,
+                playerName: player.name
+            });
+
+            game.turnCursor++;
+            game.turnsTaken = game.turnCursor;
+            continue;
+        }
+
+        game.turnIndex = room.players.findIndex(
+            current => current.id === player.id
+        );
+        game.currentPlayerId = player.id;
         game.hasRolled = false;
+        game.turnsTaken = game.turnCursor;
 
         io.to(room.code).emit("turnStarted", {
             playerId: player.id,
@@ -1065,13 +1078,12 @@ function startCurrentTurn(room) {
         });
 
         sendGameState(room);
-
         return;
     }
 
-    if (game.turnsTaken >= totalPlayers) {
-        startLesson(room);
-    }
+    game.turnsTaken = game.turnOrder.length;
+    game.currentPlayerId = null;
+    startLesson(room);
 }
 
 function advanceTurn(room) {
@@ -1079,21 +1091,16 @@ function advanceTurn(room) {
 
     const game = room.game;
 
+    if (!game.currentPlayerId) return;
+
     if (game.advanceTimer) {
         clearTimeout(game.advanceTimer);
         game.advanceTimer = null;
     }
 
-    game.turnsTaken++;
-
-    if (game.turnsTaken >= room.players.length) {
-        startLesson(room);
-        return;
-    }
-
-    game.turnIndex =
-        (game.turnIndex + 1) % room.players.length;
-
+    game.currentPlayerId = null;
+    game.turnCursor++;
+    game.turnsTaken = game.turnCursor;
     game.hasRolled = false;
 
     startCurrentTurn(room);
@@ -1110,7 +1117,7 @@ function rollDice(socket) {
     const game = room.game;
 
     if (!player || !player.connected) return;
-    if (room.players[game.turnIndex]?.id !== playerId) return;
+    if (game.currentPlayerId !== playerId) return;
     if (game.hasRolled) return;
 
     const dice = Math.floor(Math.random() * 6) + 1;
@@ -1186,7 +1193,7 @@ function buyItem(socket, data) {
     const game = room.game;
 
     if (!player || !player.connected) return;
-    if (room.players[game.turnIndex]?.id !== playerId) return;
+    if (game.currentPlayerId !== playerId) return;
     if (game.hasRolled) return;
 
     const itemId = data?.itemId || data?.item;
@@ -1266,15 +1273,33 @@ function removePlayer(room, playerId) {
     }
 
     const game = room.game;
+    const turnOrderIndex = game && game.phase === "turn"
+        ? game.turnOrder.indexOf(playerId)
+        : -1;
 
     const wasCurrentPlayer = game &&
         game.phase === "turn" &&
-        game.turnIndex === index;
-
-    const hadRolled = wasCurrentPlayer && game.hasRolled;
+        game.currentPlayerId === playerId;
 
     room.players.splice(index, 1);
     playerRooms.delete(playerId);
+
+    if (game && game.phase === "turn" && turnOrderIndex !== -1) {
+        if (turnOrderIndex < game.turnCursor) {
+            game.turnCursor = Math.max(0, game.turnCursor - 1);
+        } else if (turnOrderIndex === game.turnCursor && wasCurrentPlayer) {
+            if (game.advanceTimer) {
+                clearTimeout(game.advanceTimer);
+                game.advanceTimer = null;
+            }
+
+            game.currentPlayerId = null;
+            game.hasRolled = false;
+        }
+
+        game.turnOrder.splice(turnOrderIndex, 1);
+        game.turnsTaken = game.turnCursor;
+    }
 
     if (room.players.length === 0) {
         clearRoomTimers(room);
@@ -1348,29 +1373,14 @@ function removePlayer(room, playerId) {
     }
 
     if (game && game.phase === "turn") {
-        if (index < game.turnIndex) {
-            game.turnIndex--;
-        } else if (index === game.turnIndex) {
-            game.turnIndex = index % room.players.length;
+        if (game.currentPlayerId) {
+            game.turnIndex = room.players.findIndex(
+                current => current.id === game.currentPlayerId
+            );
         }
 
-        if (wasCurrentPlayer) {
-            if (game.advanceTimer) {
-                clearTimeout(game.advanceTimer);
-                game.advanceTimer = null;
-            }
-
-            if (hadRolled) {
-                game.turnsTaken++;
-
-                if (game.turnsTaken >= room.players.length) {
-                    startLesson(room);
-                } else {
-                    startCurrentTurn(room);
-                }
-            } else {
-                startCurrentTurn(room);
-            }
+        if (wasCurrentPlayer || !game.currentPlayerId) {
+            startCurrentTurn(room);
         }
     }
 
@@ -1420,7 +1430,7 @@ function handleDisconnect(socket) {
     if (room.started && room.game) {
         if (
             room.game.phase === "turn" &&
-            room.players[room.game.turnIndex]?.id === playerId
+            room.game.currentPlayerId === playerId
         ) {
             advanceTurn(room);
         }
