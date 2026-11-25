@@ -54,11 +54,7 @@ const SHOP_ITEMS = {
     double: 30,
     freeze: 50,
     points: 80,
-    shield: 40,
-    magnet: 35,
-    swap: 60,
-    rocket: 45,
-    prank: 45
+    shield: 40
 };
 
 const MAP_EVENTS = {
@@ -126,7 +122,6 @@ const MAP_EVENTS = {
 
 function getMapTileType(position) {
     const index = ((Number(position) % 48) + 48) % 48;
-    if (index % 17 === 9) return "party";
     if (index % 13 === 7) return "mapEvent";
     if (index % 8 === 5) return "red";
     if (index % 9 === 4) return "event";
@@ -142,63 +137,6 @@ function triggerMapEvent(room, player) {
 
     return {
         ...selected,
-        coinsChange: player.coins - before
-    };
-}
-
-function triggerPartyEvent(room, player) {
-    const rivals = getConnectedPlayers(room).filter(other => other.id !== player.id);
-    const richest = [...rivals].sort((a, b) => b.coins - a.coins)[0];
-    const events = [
-        {
-            emoji: "🎁",
-            title: "¡Regalo sorpresa!",
-            description: "La producción del laboratorio salió perfecta. Ganaste 25 monedas.",
-            apply() { player.coins += 25; }
-        },
-        {
-            emoji: "🧲",
-            title: "¡Imán travieso!",
-            description: richest
-                ? `El imán atrajo 12 monedas de ${richest.name}.`
-                : "No había rivales para atraer monedas.",
-            apply() {
-                if (!richest) return;
-                const amount = Math.min(12, richest.coins);
-                richest.coins -= amount;
-                player.coins += amount;
-            }
-        },
-        {
-            emoji: "🎉",
-            title: "¡Lluvia de monedas!",
-            description: "Todos recibieron 5 monedas. ¡La fiesta es para todos!",
-            apply() {
-                getConnectedPlayers(room).forEach(p => { p.coins += 5; });
-            }
-        },
-        {
-            emoji: "🧾",
-            title: "¡Impuesto inesperado!",
-            description: "El laboratorio cobró 12 monedas de mantenimiento.",
-            apply() { player.coins = Math.max(0, player.coins - 12); }
-        },
-        {
-            emoji: "🍀",
-            title: "¡Golpe de suerte!",
-            description: "Encontraste una ficha de bonificación. Ganaste 15 monedas.",
-            apply() { player.coins += 15; }
-        }
-    ];
-
-    const selected = events[Math.floor(Math.random() * events.length)];
-    const before = player.coins;
-    selected.apply();
-
-    return {
-        emoji: selected.emoji,
-        title: selected.title,
-        description: selected.description,
         coinsChange: player.coins - before
     };
 }
@@ -347,6 +285,7 @@ function getGameState(room) {
             scores: { ...game.minigame.scores },
             endsAt: game.minigame.endsAt,
             type: game.minigame.type,
+            variant: game.minigame.variant || null,
             level: game.minigame.level,
             teams: publicThermoTeams(room)
         } : null,
@@ -989,12 +928,11 @@ function thermoCalc(socket, data) {
 
 function getMinigameConfig(room) {
     const round = room.game.round;
+    const rotation = ["runner", "gravity", "circuit", "balance", "friction", "thermo"];
+    const selected = FORCE_MINIGAME || rotation[(Math.max(1, round) - 1) % rotation.length];
 
-    const type = FORCE_MINIGAME || (round % 2 === 0 ? "thermo" : "runner");
-
-    if (type === "thermo") {
-        const index = Math.max(0, Math.min(2, Math.floor(round / 2) - 1));
-
+    if (selected === "thermo") {
+        const index = Math.max(0, Math.min(2, Math.floor(round / rotation.length)));
         return {
             type: "thermo",
             level: ["easy", "medium", "hard"][index],
@@ -1002,8 +940,18 @@ function getMinigameConfig(room) {
         };
     }
 
+    if (selected === "runner") {
+        const variants = ["classic", "lowGravity", "ice", "meteor", "magnet", "wind"];
+        return {
+            type: "runner",
+            variant: variants[Math.floor((round - 1) / rotation.length) % variants.length],
+            level: null,
+            duration: PLAYER_SECONDS
+        };
+    }
+
     return {
-        type: "runner",
+        type: selected,
         level: null,
         duration: PLAYER_SECONDS
     };
@@ -1020,7 +968,7 @@ function startMinigame(room) {
     let config = getMinigameConfig(room);
 
     if (config.type === "thermo" && participants.length !== 4) {
-        config = { type: "runner", level: null, duration: PLAYER_SECONDS };
+        config = { type: "runner", variant: "classic", level: null, duration: PLAYER_SECONDS };
     }
 
     const endsAt = Date.now() + config.duration * 1000;
@@ -1032,6 +980,7 @@ function startMinigame(room) {
         scores: {},
         endsAt,
         type: config.type,
+        variant: config.variant || null,
         level: config.level,
         teams: config.type === "thermo"
             ? createThermoTeams(participants, config.level)
@@ -1046,6 +995,7 @@ function startMinigame(room) {
         topicIndex: room.game.topicIndex,
         participants,
         type: config.type,
+        variant: config.variant || null,
         level: config.level,
         teams: publicThermoTeams(room),
         duration: config.duration,
@@ -1313,13 +1263,8 @@ function rollDice(socket) {
     let message = "";
     let coinsChange = 0;
     let mapEvent = null;
-    let partyEvent = null;
 
-    if (tileType === "party") {
-        partyEvent = triggerPartyEvent(room, player);
-        coinsChange = partyEvent.coinsChange;
-        message = `${partyEvent.emoji} ${partyEvent.title}: ${partyEvent.description}`;
-    } else if (tileType === "mapEvent") {
+    if (tileType === "mapEvent") {
         mapEvent = triggerMapEvent(room, player);
         coinsChange = mapEvent.coinsChange;
         message = `${mapEvent.emoji} ${mapEvent.title}: ${mapEvent.description}`;
@@ -1356,7 +1301,6 @@ function rollDice(socket) {
         coinsChange,
         message,
         mapEvent,
-        partyEvent,
         players: publicPlayers(room)
     });
 
@@ -1394,13 +1338,6 @@ function buyItem(socket, data) {
         return;
     }
 
-    const rivals = getConnectedPlayers(room).filter(other => other.id !== playerId);
-
-    if ((itemId === "magnet" || itemId === "swap" || itemId === "prank") && !rivals.length) {
-        socket.emit("roomError", "Necesitas al menos otro jugador para usar ese objeto.");
-        return;
-    }
-
     player.coins -= cost;
 
     let effect = "";
@@ -1434,36 +1371,6 @@ function buyItem(socket, data) {
     if (itemId === "shield") {
         player.shield = true;
         effect = "Estás protegido de la próxima casilla roja.";
-    }
-
-    if (itemId === "magnet") {
-        const target = [...rivals].sort((a, b) => b.coins - a.coins)[0];
-        const amount = Math.min(15, target.coins);
-        target.coins -= amount;
-        player.coins += amount;
-        targetName = target.name;
-        effect = `¡Le quitaste ${amount} monedas a ${target.name}!`;
-    }
-
-    if (itemId === "swap") {
-        const target = [...rivals].sort((a, b) => b.pos - a.pos)[0];
-        const oldPosition = player.pos;
-        player.pos = target.pos;
-        target.pos = oldPosition;
-        targetName = target.name;
-        effect = `Intercambiaste posiciones con ${target.name}.`;
-    }
-
-    if (itemId === "rocket") {
-        player.pos += 4;
-        effect = "¡Cohete activado! Avanzaste 4 casillas adicionales.";
-    }
-
-    if (itemId === "prank") {
-        const target = [...rivals].sort((a, b) => a.coins - b.coins)[0];
-        target.frozen = true;
-        targetName = target.name;
-        effect = `¡Broma científica! ${target.name} perderá su próximo turno.`;
     }
 
     io.to(room.code).emit("itemPurchased", {
