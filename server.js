@@ -21,7 +21,7 @@ const MIN_PLAYERS = 2;
 const MINIGAME_POINTS = 50;
 
 const GOAL = 500;
-const PLAYER_SECONDS = 12;
+const PLAYER_SECONDS = 25;
 const THERMO_SECONDS = 110;
 const FORCE_MINIGAME = null;
 const THERMO_SIM_SECONDS = 60;
