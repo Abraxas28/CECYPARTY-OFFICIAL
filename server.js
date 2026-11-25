@@ -1247,13 +1247,16 @@ function rollDice(socket) {
     player.double = false;
     player.pos += total;
 
-    let tileType = "blue";
+    let tileType = getMapTileType(player.pos);
     let message = "";
     let coinsChange = 0;
+    let mapEvent = null;
 
-    if (player.pos % 8 === 5) {
-        tileType = "red";
-
+    if (tileType === "mapEvent") {
+        mapEvent = triggerMapEvent(room, player);
+        coinsChange = mapEvent.coinsChange;
+        message = `${mapEvent.emoji} ${mapEvent.title}: ${mapEvent.description}`;
+    } else if (tileType === "red") {
         if (player.shield) {
             player.shield = false;
             message = "¡Tu escudo te protegió!";
@@ -1262,19 +1265,16 @@ function rollDice(socket) {
             coinsChange = -8;
             message = "Perdiste 8 monedas.";
         }
-    } else if (player.pos % 9 === 4) {
-        tileType = "event";
-
+    } else if (tileType === "event") {
         player.coins += 15;
         coinsChange = 15;
-
         message = "¡Casilla especial! Ganaste 15 monedas.";
     } else {
         player.coins += 10;
         coinsChange = 10;
-
         message = "¡Ganaste 10 monedas!";
     }
+
 
     game.hasRolled = true;
 
@@ -1288,6 +1288,7 @@ function rollDice(socket) {
         tileType,
         coinsChange,
         message,
+        mapEvent,
         players: publicPlayers(room)
     });
 
